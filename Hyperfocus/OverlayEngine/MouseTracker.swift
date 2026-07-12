@@ -1,7 +1,7 @@
 import Cocoa
 
-/// Tracks the global mouse position and fires callbacks when the cursor
-/// enters or leaves the focused window frame.
+/// Tracks the mouse position by polling `NSEvent.mouseLocation` at 20 Hz.
+/// No Accessibility or other permissions required.
 final class MouseTracker {
     /// Fires when the cursor moves from outside the focused window into it.
     var onMouseEnteredWindow: (() -> Void)?
@@ -17,7 +17,7 @@ final class MouseTracker {
     /// flickering when the cursor is exactly on the edge.
     private let edgeInset: CGFloat = 5
 
-    private var monitor: Any?
+    private var timer: Timer?
     private var isInside = false
 
     /// Whether the cursor is currently inside the focused window frame.
@@ -26,29 +26,28 @@ final class MouseTracker {
     // MARK: - Lifecycle
 
     func start() {
-        guard monitor == nil else { return }
+        guard timer == nil else { return }
         isInside = false
-        monitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
-            self?.handleMouseMove(at: NSEvent.mouseLocation)
+        let timer = Timer(timeInterval: 1.0 / 20.0, repeats: true) { [weak self] _ in
+            self?.poll()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     func stop() {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
-        }
-        monitor = nil
+        timer?.invalidate()
+        timer = nil
         isInside = false
     }
 
     // MARK: - Hit testing
 
-    private func handleMouseMove(at screenPoint: NSPoint) {
+    private func poll() {
+        let screenPoint = NSEvent.mouseLocation
         guard let frame = windowFrame else { return }
 
-        // Convert from bottom-left (Cocoa) to our frame's coordinate system.
-        // NSEvent.mouseLocation is in AppKit screen coordinates (bottom-left origin),
-        // same as CGRect. Simple CGRect.contains works.
+        // Both are in AppKit screen coordinates (bottom-left origin).
         let insetFrame = frame.insetBy(dx: edgeInset, dy: edgeInset)
         let nowInside = insetFrame.contains(screenPoint)
 
