@@ -1,0 +1,242 @@
+# Marktbericht für eine wettbewerbsfähige macOS-App zur aktiven Fensterfokussierung
+
+## Executive Summary
+
+Der Markt für macOS-Apps, die Hintergrundfenster abdunkeln, verwischen oder anderweitig ausblenden, ist klein, aber klar lebendig. Der etablierte Referenzanbieter HazeOver wird weiterhin gepflegt und steht aktuell bei Version 1.9.7; zugleich sind in den Jahren 2025 und 2026 mehrere neue oder stark weiterentwickelte Produkte sichtbar geworden, darunter Focusdim, Monocle, Hush, Fader und die jüngeren HokusFokus-Updates. Auf Product Hunt zeigen HazeOver, Focusdim und Monocle zudem wiederkehrende Nachfrage- und Community-Signale über einen langen Zeitraum hinweg. Das spricht gegen die These, dass die Nische „fertig“ sei; vielmehr ist sie in eine neue Phase übergegangen, in der nicht mehr bloß „dunkler Hintergrund“ verkauft wird, sondern ein Bündel aus Fokus, Ästhetik, Screen-Sharing-Sicherheit, Multi-Display-Zuverlässigkeit und Workflow-Integration. citeturn6view0turn3view1turn10view0turn13search2turn17view0turn16view0turn30view0turn22search3turn22search2
+
+Die Wettbewerbsdynamik ist heute in drei Cluster aufgeteilt. Erstens gibt es den klassischen Einmal-Kauf im Bereich von etwa 4,99 US-Dollar, vor allem bei HazeOver, Window Focus, Focusdim Pro und Fader. Zweitens existiert ein moderneres Blur- und Präsentationssegment, in dem Monocle und Hush stärker über Ästhetik, „calm workspace“ und Screen-Sharing-Nutzen sprechen; dort liegen die Preise sichtbar höher, grob um 8,99 bis 9 US-Dollar. Drittens gibt es breiter gefasste „Declutter“- oder „Workspace Cleanup“-Produkte wie HokusFokus, die über das reine aktive Fenster hinaus Desktop, Menüleiste und Präsentationskontexte besetzen und deshalb auch eher ein Abo rechtfertigen. Das wichtigste Markt-Signal ist dabei: Das reine Dimming ist inzwischen teilweise Commodity; bezahlt wird eher für Reibungslosigkeit, Modusvielfalt, Permissions-Klarheit und Vertrauen. citeturn5search0turn9view0turn10view1turn16view0turn17view2turn0search13turn13search6turn4view2turn34view1
+
+Die größte Lücke liegt nicht darin, HazeOver eins zu eins zu kopieren, sondern die Kategorie in Richtung eines **permission-lights Kernprodukts mit optionalem Premium-Blur** weiterzuentwickeln. Nutzer wollen zuverlässig zwischen aktivem Fenster und aktiver App unterscheiden, einzelne Apps oder PiP-/Medienfenster ausnehmen, Stage Manager, Split View, Mission Control und mehrere Displays sauber unterstützen und möglichst wenig Berechtigungsfriktion erleben. Zugleich zeigen Monocle, Hush und Fader, dass ein zusätzlicher „Share/Present“-Anwendungsfall mittlerweile fast ebenso relevant ist wie klassisches Deep Work. Besonders wertvoll wäre daher eine hybride Produktstrategie: **Core ohne Screen-Recording-Berechtigung** für Dim, Border und schnelle Fokusumschaltung; **Pro mit opt-in Screen Recording** für Live-Blur, „Selected Apps“, Screen-Share-Autodetektion und Präsentationsmodi. citeturn9view0turn16view1turn17view4turn16view0turn21search2turn21search3turn21search9turn10view0turn32view3
+
+Aus Business-Sicht spricht vieles für ein Produkt mit **Freemium-Core plus einmaligem Pro-Upgrade**. Der Markt signalisiert eine hohe Akzeptanz für Einmalpreise im unteren bis mittleren einstelligen Dollarbereich, während ein Abo nur dann tragfähig wirkt, wenn die App deutlich über aktive Fensterfokussierung hinausgeht. Ein wettbewerbsfähiger Sweet Spot wäre daher: kostenloser Kernmodus, einmaliges Upgrade zwischen **6,99 und 9,99 Euro**, später ergänzt durch Direktvertrieb, Homebrew, Setapp oder Bildungslizenzen. Die technisch sinnvollste Basis wäre eine Premium-Zielplattform ab **macOS 12.3+** wegen ScreenCaptureKit für Blur, bei gleichzeitiger Überlegung eines **Dim-only-Legacy-Pfads für 10.15–12.2**, falls Reichweite auf älteren Intel-Macs strategisch gewünscht ist. Die grobe Modellschätzung für ein belastbares MVP liegt bei etwa **4–6 Person-Monaten**, ein voll ausgebautes Produkt mit Blur-, Sharing-, Integrations- und Vertriebsfeatures eher bei **9–15 Person-Monaten**. Diese Aufwands- und Kostenspannen sind im Bericht als eigene Modellannahmen ausgewiesen. citeturn27search25turn23search4turn3view1turn4view5turn5search0turn10view1turn17view2
+
+## Wettbewerbslandschaft
+
+Die Konkurrenz ist heterogener als der Markt auf den ersten Blick vermuten lässt. HazeOver bleibt der Referenzpunkt für die klassische Kategorie, Focusdim besetzt den preisaggressiven Hybrid aus Dim/Blur/Border, Window Focus ist der geradlinige „old-school“-Ersatz, Monocle steht für Design und Blur-Ästhetik, Hush verbindet Fokus mit Screen-Sharing, HokusFokus erweitert das Problem nach „Desktop/menubar declutter“, Fader zeigt eine no-permission-Alternative per Hide-Mechanik, und Blurred bleibt als kostenloser Legacy-Fall relevant. Zugleich belegen Product-Hunt-Launches und aktuelle Versionshistorien, dass der Raum auch 2026 aktiv bearbeitet wird. citeturn30view0turn22search3turn22search2turn17view0turn34view2turn16view0turn4view7
+
+| Produkt | Positionierung | Relevante Funktionen | Preis und Modell | Mindest-macOS | Vertrieb | Release- und Wartungsstatus | Datenschutz und Berechtigungen |
+|---|---|---|---|---|---|---|---|
+| **HazeOver** | Referenzprodukt für klassisches Active-Window-Dimming | Dimming des Hintergrunds, Sichtbarkeit des Keyboard-Fokus, Multi-Monitor-Highlighting, verschiedene Light/Dark-Einstellungen, Shortcut/Gesten, Shortcuts, Focus Filters, AppleScript, Trial, ältere Builds für ältere macOS-Versionen | **4,99 US$** einmalig; Free Trial; auch via **Setapp**; Student Discount erwähnt citeturn5search0turn3view0turn32view3 | **macOS 12+** aktuell; direkte Downloads für **11** und **10.15** werden weiter angeboten citeturn3view1turn4view9 | Mac App Store, Direktdownload, Setapp citeturn3view1turn3view0 | Aktuell **1.9.7**, laut App Store/Download-Seite gepflegt; Release Notes nennen Updates für macOS Tahoe, Accessibility und Bugfixes citeturn6view0turn3view1 | App Store: **keine Daten erhoben**; deklarierte Accessibility-Features u. a. VoiceOver, Reduced Motion, Sufficient Contrast citeturn6view2turn6view3 |
+| **Focusdim** | Preis-/Value-Herausforderer mit Hybrid aus Dim, Blur und Border | Dim/Blur, Border-Highlight, Whole-App- oder Window-Focus, Multi-Monitor, Hotkeys, Exclusions, Animationen, Import/Export; Free vs Pro klar differenziert | **Free + IAP**, **Pro Features 4,99 US$**; One-time Upgrade citeturn10view1turn3view2 | **macOS 12.4+** citeturn4view10turn3view2 | App Store, Dev-Site citeturn4view10turn3view2 | Aktuell **1.4.3** vom **2. Juli**; jüngste Changelogs nennen Mission Control/Spaces, Hover Preview, CPU-Senkung, Multi-Monitor-Fixes citeturn10view0 | App Store: **keine Daten erhoben**; Accessibility-Support noch nicht deklariert citeturn10view1turn10view2 |
+| **Window Focus** | Geradlinige, traditionelle HazeOver-Alternative | Dimming-Overlay, freie Farbe/Opacity, Modi **Single Window**, **Per Screen**, **Active App**, App Exclusions, Launch at Login, Multi-Display | **4,99 US$** einmalig citeturn9view0 | **macOS 11.5+** citeturn9view0turn3view3 | Mac App Store | Aktuell **1.0.8** vom **19. Februar**; 2026-Update mit macOS-Tahoe-Support und Performance-Verbesserungen citeturn9view0 | App Store: **Contact Info** kann mit Nutzer verknüpft werden; **Diagnostics/Crash Data** nicht verknüpft; Accessibility nicht deklariert citeturn9view0 |
+| **Monocle** | Design- und Blur-first-Produkt mit starkem Lifestyle-/Aesthetic-Narrativ | Blur everything but active window, Cursor-Shake-Reveal, App Groups, Stage-Manager-Support, Per-Screen/Global, Blur-free Mode; Raycast-Extension zeigt zusätzliche Befehle für Tint, Grain, Monochrome, App-Wide Focus, Exclusions citeturn3view4turn33search0turn13search4 | Preis in aktueller unabhängiger Berichterstattung bei **ca. 9 US$**; offizielle indexierte Preisansicht war nicht sauber lesbar citeturn0search13turn13search6 | Homebrew listet **macOS ≥ 14**; ältere Snapshots nannten **14.6+** citeturn13search2turn11search5 | Direktvertrieb, Gumroad, Homebrew citeturn11search0turn13search2 | Aktuell **3.5.1** in Homebrew; offizielle Site zeigt **Download v3.5**; Reddit-Update vom letzten Monat dokumentiert große 3.5-Erweiterung citeturn13search2turn3view4turn33search0 | Kein App-Store-Privacy-Label verfügbar; Direktsales-Modell. Öffentlich sichtbar ist keine Datensammel-Erzählung, aber auch keine Apple-Privacy-Tafel. citeturn3view4turn13search2 |
+| **HokusFokus** | Breiteres „Declutter your Mac“-Produkt | Fading/Transparenz für inaktive Fenster, Desktop-Flashlight, Focus Mode, Exclude Apps/Displays, Menüleisten-/Dock-Aufräumen, Video-Call-/Screen-Recording-Szenarien | **Free + Abo**: **1,99 US$/Monat** oder **14,99 US$/Jahr** citeturn4view0turn4view2 | **macOS 14.6+** citeturn4view0 | App Store | Aktuell **1.4.4**; Version History zeigt mehrere 2025/2026-Updates mit Desktop/Flashlight, Screen-Fixes und Reliability-Verbesserungen citeturn34view2turn4view1 | App Store: **keine Daten erhoben** citeturn34view0turn4view4 |
+| **Hush** | Fokus + Screen-Sharing-/Präsentationssicherheit | Free Desktop Mode, Pro Active Window / Selected Apps / Cursor Focus, Auto-Erkennung von Sharing in Zoom/Meet/Teams, Blur/Color/Custom background, Multi-Display, Dock/Menu-Bar-Hide | **Free Download**, 5-Tage-Test, **Hush Pro 8,99 US$** als einmaliger Kauf citeturn16view1turn17view2 | **macOS 14.0+** citeturn17view4 | App Store | Aktuell **2.5.0**, laut App Store vor **20 Stunden** aktualisiert; jüngste Changelogs nennen energieeffizientere Renderpfade und Window-Cutouts citeturn17view0 | App Store: **keine Daten erhoben**; deklarierte Accessibility-Features; **Screen Recording Permission erforderlich**, um Blur zu rendern citeturn17view3turn16view1 |
+| **Fader** | No-permission-Fokusprodukt über „Hide“-Mechanik statt Overlay-Blur | Blendet Hintergrund-Apps via standardmäßigem Hide-Mechanismus aus, Delay-Regler, „Pin apps“, Media-App-Ausnahmen, Hotkey, Launch at Login | **4,99 US$** einmalig citeturn16view0 | **macOS 13.0+** citeturn16view0 | App Store | Neues 2026er Produkt; Copyright 2026 und aktueller, im Store sichtbarer Launch-Status sprechen für frühe Marktphase citeturn16view0 | App Store: **keine Daten erhoben**; **keine** Accessibility- oder Screen-Recording-Berechtigung; Dev betont ausdrücklich **„Permissions: None“** citeturn16view0 |
+| **Blurred** | Kostenloser Legacy-Fallback | Single-/Parallel-Dim, Launch at Login, globaler Shortcut | **kostenlos** citeturn3view6 | **macOS 10.15+** citeturn4view5 | App Store | Letztes sichtbares Update **1.2.0 am 23.06.2020**; faktisch Low-Maintenance/Legacy citeturn4view7 | Der Entwickler hat **keine Privacy-Details bei Apple angegeben** citeturn4view6 |
+
+Das eigentliche Wettbewerbsbild lässt sich so lesen: **HazeOver** verteidigt die Basiskategorie mit Reife, Automation und Kompatibilität; **Focusdim** ist der aktuell gefährlichste Preis-/Funktions-Konkurrent; **Window Focus** bedient Nutzer, die möglichst wenig Design-Experiment und möglichst wenig Komplexität wollen; **Monocle** und **Hush** zeigen, dass es jenseits des klassischen Dimmens eine zahlungsbereite Nachfrage nach visuell angenehmeren und screen-share-freundlicheren Produkten gibt; **Fader** beweist, dass „weniger Permissions“ selbst ein differenzierender Nutzen ist; **Blurred** zeigt zugleich, wie offen die Tür für einen modernen kostenlosen oder freemium Einstieg bleibt. citeturn30view0turn10view0turn9view0turn33search0turn17view0turn16view0turn4view7
+
+## Nutzerbedürfnisse und Pain Points
+
+Die aussagekräftigsten Nutzersignale kommen aus vier Quellen: App-Store-Reviews, Reddit-Diskussionen, Product-Hunt-Reviews und in begrenztem Umfang öffentlich indexierbare X-Posts. Über alle Kanäle hinweg wiederholen sich dieselben Bedarfe: weniger visuelles Rauschen, saubere Multi-Display-Semantik, wählbare Fokuslogik zwischen aktivem Fenster und aktiver App, ästhetisch angenehmere Hintergrundbehandlung, mehr Verlässlichkeit in macOS-Sondermodi und möglichst wenig Permission-Friktion. citeturn1search15turn9view0turn16view1turn30view0turn30view1turn21search2turn21search3
+
+| Wiederkehrendes Bedürfnis oder Problem | Beleg aus Quellen | Produktimplikation |
+|---|---|---|
+| **Multi-Display, Split View, Spaces und Stage Manager müssen „einfach richtig“ funktionieren** | Window-Focus-Review beschreibt, dass in Split Screen beide Apps gedimmt werden; Monocle 3.5 wirbt explizit mit Stage-Manager-Support; Focusdim nennt Mission Control/Spaces und Multi-Monitor-Fixes; HazeOver-Changelogs erwähnen wiederholt Mission Control, Fullscreen und mehrere Displays. citeturn9view0turn33search0turn10view0turn32view3 | Stabilität in Sondermodi ist kein Nice-to-have, sondern kaufentscheidend. QA muss diese Matrix priorisieren. |
+| **Active Window reicht oft nicht; Nutzer brauchen Active App, Allowlist und PiP-/Media-Ausnahmen** | Hush-Review fordert Whitelist und „active-app vs active-window“; HokusFokus-Review fragt nach intelligenterer Überlappungslogik; Window Focus und Focusdim haben App-Ausnahmen bereits im Kernfeature-Set. citeturn16view1turn1search13turn3view3turn3view2 | Ein Wettbewerber sollte von Start an mindestens drei Logiken bieten: Active Window, Active App, Selected Apps. |
+| **Blur wird als angenehmer, dim-only teils als zu hart empfunden** | Ein Reddit-Nutzer nennt Blur gegenüber dunklem Dimming „much easier on the eyes“; Product-Hunt-Reviews zu HazeOver wünschen explizit eine Blur-Option; Monocle positioniert sein Blur als „presence“- und Calm-Experience. citeturn21search11turn30view0turn30view1 | Blur ist eine echte Differenzierung, aber er muss optional sein; manche Nutzer wollen weiterhin reines Dim oder Border. |
+| **Performance und Energieverbrauch sind bei Blur der kritischste Vertrauensfaktor** | Der Reddit-Thread zu Monocle nennt >50 % GPU-Verbrauch auf einem M4 Pro und berichtet über Blur-Fehlverhalten nach UI-Updates; Hush 2.5.0 nennt explizit geringere Last und bessere Energieeffizienz; Focusdim 1.4.2 nennt niedrigere CPU-Nutzung. citeturn11search3turn21search2turn17view0turn10view0 | Blur darf niemals der Default sein, wenn der Rechner heiß oder laut wird. Ein Performance-Safe-Mode ist strategisch wichtig. |
+| **Screen Sharing und Präsentationen sind ein zweiter, stark wachsender Use Case** | Hush baut seine Hauptstory um „screen share without the anxiety“; Window-Focus-App-Store-Review beschreibt Nutzen für Meetings und das Verbergen von Desktop-Clutter; HokusFokus nennt Video Calls und Screen Recordings; PeekFocus bewirbt „instantly presentable“ auf Product Hunt. citeturn16view1turn9view0turn34view1turn15search1 | Es lohnt sich, das Produkt nicht nur als Productivity-App, sondern auch als Präsentations- und Privacy-Tool zu positionieren. |
+| **Fokustools werden auch als Accessibility- oder Neurodiversitätswerkzeug genutzt** | Fader adressiert explizit ADHD und sensory-processing sensitivities; Monocle wurde auf Reddit von einem Nutzer auch explizit in Richtung Minimalismus/ADHD gerahmt; HazeOver hat deklarierte Accessibility-Unterstützung wie Reduced Motion. citeturn16view0turn21search7turn6view2 | Accessibility darf kein Appendix sein, sondern sollte in den Kern der Produktstory. |
+| **Preis und Friktion sind real — besonders außerhalb hochpreisiger Märkte** | Eine Focusdim-Review kritisiert, dass Blur zunächst paywalled war, und macht dabei explizit Einkommens- und Zahlungsbarrieren in Algerien sichtbar; zugleich zeigen Product-Hunt- und App-Store-Daten, dass der Markt sehr stark auf günstige One-time-Käufe konditioniert ist. citeturn10view0turn5search0turn9view0turn17view2 | Ein kostenloser Kernmodus oder regional/fairness-sensitive Preisgestaltung ist nicht nur Growth-Hebel, sondern kann echten Einwand auflösen. |
+
+App-Store-Reviews zeigen außerdem, **wo „Wert“ wahrgenommen wird**. HazeOver wird für einstellbare Intensität und ein stabiles Zwei-Monitor-Setup gelobt; Window Focus wird in Reviews explizit für konzentriertes Schreiben und Meetings gelobt; Hush erhält Lob für seinen Deep-Work-Effekt, aber unmittelbares Feedback zu Whitelists und einer klareren Benennung von Features. Diese Kombination ist bemerkenswert: Nutzer vergeben Geld und gute Bewertungen nicht primär für spektakuläre Features, sondern für das Gefühl, dass die App „implizit mitdenkt“ und ihren Workflow nicht überrascht. citeturn1search15turn9view0turn16view1
+
+Product Hunt ergänzt dieses Bild um eine wichtigere, strategische Ebene. HazeOver wird dort konsistent als Reduktion von „visual noise“ beschrieben; ein Review wünscht Blur als zusätzliche Stufe. Monocle verschiebt die Erzählung in Richtung „presence“ und Calming-Design. Focusdim wiederum spricht von „subtle visual cues“ statt bloß Abdunkeln. Das bedeutet: Die Kategorie ist kommunikativ offen für ein Reframing von „Produktivitäts-Utility“ hin zu „visuellem Fokus-Interface“ — ein höherwertigeres Narrativ, das Preisspielraum schafft. citeturn30view0turn30view1turn22search3
+
+Bei X war das öffentlich indexierbare Material deutlich dünner als bei Reddit oder dem App Store. Sichtbar waren vor allem Marketing- und Launch-Signale, etwa HazeOvers Hinweis auf Focus-Filter-Automation in macOS Ventura und Monocles öffentliche Release-Kommunikation. Das ist selbst eine Erkenntnis: X liefert in dieser Nische eher **Top-of-Funnel-Resonanz und Messaging** als tiefes Support-Feedback. Für laufende Nutzerforschung wären Reddit, In-App-Feedback und App-Store-Reviews daher deutlich ergiebiger. citeturn35search0turn19search0turn11search8
+
+Die größte ungelöste Lücke im Markt ist damit nicht „noch ein Dimm-Tool“, sondern ein Produkt, das **Zuverlässigkeit, visuelle Qualität und geringere Permission-Kosten** in einer App zusammenführt. Genau dort liegt die realistischste Angriffsfläche gegen HazeOver und die neueren Blur-Tools zugleich. citeturn16view0turn16view1turn10view0turn32view3
+
+## Technische Machbarkeit und Plattformstrategie
+
+Technisch ist das Vorhaben gut machbar, wenn man das Produkt nicht als monolithisches „Blur-Feature“ baut, sondern als **zweistufige Architektur**. Eine erste Stufe liefert Dimming, Borders, Active-App-/Active-Window-Semantik und Multi-Display-Verhalten ohne Screen-Recording-Pfad. Eine zweite, optionale Stufe erweitert das System um Live-Blur, Screen-Share-Modi und visuelle Präsentationsfeatures mit ScreenCaptureKit. Genau diese Aufteilung ist technisch und geschäftlich attraktiv, weil sie Hushs tiefere Blur-/Sharing-Funktionen mit Faders no-permission-Prinzip und HazeOvers reifem Fokus-Workflow kombiniert. citeturn16view1turn16view0turn32view3
+
+Apple stellt heute die relevanten Systembausteine bereit. **ScreenCaptureKit** wurde in **macOS 12.3** eingeführt und ist der moderne, performante Weg für Screen-Capture- und Blur-nahe Szenarien; Apple weist zugleich darauf hin, dass beim ersten Start Screen-Recording-Permission benötigt wird und die App nach Erteilung neu gestartet werden muss. Für Fenstererkennung und -topologie lassen sich **CGWindowListCopyWindowInfo** und verwandte Quartz-Window-Services nutzen; für tiefere Accessibility-Interaktion und Trust-Prüfung steht **AXIsProcessTrustedWithOptions** bereit. Für das Verhalten eigener Overlay-Fenster in Fullscreen und Stage Manager sind **NSWindow.CollectionBehavior** sowie insbesondere **canJoinAllApplications**, **auxiliary** und **fullScreenAuxiliary** relevant. citeturn27search25turn23search4turn23search23turn24search2turn24search20turn24search1turn28search1turn28search2turn28search4turn28search11
+
+| Technisches Ziel | Primäre APIs oder Mechanik | Berechtigung | Reifegrad und Risiko |
+|---|---|---|---|
+| Aktives Fenster und On-Screen-Topologie erkennen | CGWindowListCopyWindowInfo, Quartz Window Services, on-screen/front-to-back-Optionen citeturn24search2turn24search20turn24search26 | Keine zusätzliche TCC-Permission nur für reine Enumeration | Gut machbar; heikel sind Spezialfälle wie Panels, Electron-Apps, Vollbild, Desktop-Reveal. |
+| Core-Dimming ohne Blur | Eigene Overlay-NSWindows plus Window-Level/CollectionBehavior, Masking und animierte Übergänge citeturn23search1turn28search1turn28search2turn28search4 | Keine Screen-Recording-Permission; Accessiblity nur, wenn tieferer AX-Pfad nötig wird | Niedrigstes Risiko; bester Kandidat für Free/Core. |
+| Border-Highlight und Keyboard-Focus-Orientierung | Overlay-Layer oder NSWindow-Rahmen, animierte Focus-Transitions; HazeOver/Focusdim zeigen Marktwert dafür citeturn32view0turn3view2 | Keine Screen-Recording-Permission | Sehr attraktives Feature mit günstigem Implementierungsprofil. |
+| Live-Blur des Hintergrunds | ScreenCaptureKit + Core Image oder Metal; Blur-Filter via Core Image verfügbar citeturn23search0turn27search2turn27search5 | **Screen Recording** erforderlich citeturn23search4turn23search23 | Technisch stark, aber höchster UX- und Performance-Risikoblock. |
+| Legacy-Blur auf älteren Systemen | Theoretisch CGDisplayStream oder ältere CGWindowListCreateImage-Pfade citeturn27search0turn27search1 | Je nach Pfad problematisch | Strategisch unattraktiv; Apple dokumentiert CGWindowListCreateImage inzwischen als **deprecated**. citeturn27search13 |
+| Window- oder App-Steuerung über Accessibility | AXIsProcessTrustedWithOptions und AXUIElement-Familie citeturn24search1turn24search7 | **Accessibility** | Nur nutzen, wenn unbedingt nötig; Permissions kosten Conversion. |
+| Automation und Focus-Profile | App Intents, Focus filters, Shortcuts/Automation via App Intents citeturn25search0turn25search1turn25search14 | Keine zusätzliche High-Friction-Permission | Hoher Differenzierungswert bei überschaubarem technischem Aufwand. |
+
+Die schwierigsten technischen Themen werden nicht die Kernalgorithmen selbst sein, sondern **Sonderfälle des Window Managers**. Stage Manager hält die aktive Arbeitsgruppe in der Mitte und ordnet andere Apps links an; Apple dokumentiert zudem, dass Stage Manager auf dem Mac eine korrekte Spaces-Konfiguration voraussetzt und sich bei deaktivierten „separate Spaces“ nicht zuverlässig aktivieren lässt. Monocles 3.5-Changelog und die diversen Fixes in HazeOver, Focusdim, Hush und HokusFokus zeigen sehr deutlich, dass Mission Control, Split View, externe Displays, „Displays have separate Spaces“ und schnelle App-Wechsel in der Praxis die eigentlichen Fehlerquellen sind. Das ist kein Implementierungsdetail, sondern der Kern der Produktqualität. citeturn28search0turn28search3turn33search0turn10view0turn17view0turn32view3turn34view2
+
+| Zielplattform | Technisch sinnvoller Funktionsumfang | Begründung |
+|---|---|---|
+| **macOS 10.15–11** | Dim, Border, Basismodi, Exclusions, Hotkeys, Multi-Display-Basis | Blurred und ältere HazeOver-Builds zeigen, dass diese Zielgruppe noch adressierbar ist; moderne Blur-Pfade via ScreenCaptureKit fehlen hier aber. citeturn4view5turn4view7turn3view1turn27search25 |
+| **macOS 12.0–12.2** | Wie oben, aber ohne modernen Blur | ScreenCaptureKit kam erst mit 12.3. citeturn27search25 |
+| **macOS 12.3–12.x** | Vollwertiges Core-Produkt plus optionales Blur-Pro | Hier beginnt der sinnvolle Premium-Unterbau für Blur. HazeOver und Focusdim liegen mit ihren Mindestversionen im 12er-Bereich. citeturn27search25turn4view9turn4view10 |
+| **macOS 13** | Zusätzlich Stage-Manager-QA, Sharing- und Presentation-Modi, Focus-Filter-Automation | Stage Manager ist hier relevant; Fader verlangt bereits 13.0+, HazeOver nutzt Focus Filters seit Ventura. citeturn28search0turn16view0turn32view4 |
+| **macOS 14+** | Beste Zielbasis für Premium-Build: Blur, Sharing, Selected Apps, Presets, Integrationen | Monocle, Hush und HokusFokus positionieren moderne Erlebnisse genau hier; das ist das sichtbar „innovative“ Marktsegment. citeturn13search2turn17view4turn4view0 |
+
+Strategisch spricht damit vieles für eine **Dual-Support-Strategie**: Ein marktfähiges Hauptprodukt auf **12.3+**, optional ergänzt durch eine abgespeckte Legacy-Variante für 10.15–12.2, falls Reichweite auf älteren Installationen wichtig ist. Wenn Zeit und Budget begrenzt sind, sollte das Team allerdings lieber **12.3+ als Primary SKU** sauber lösen, statt Energie in einen schwächeren Blur-Fallback auf alten APIs zu investieren. citeturn27search25turn27search13turn3view1
+
+## UX-Differenzierung und Produktkonzept
+
+Die UX-Chance liegt darin, die Kategorie als **visuelles Fokus-System** neu zu formulieren, nicht bloß als Menüleisten-Utility. HazeOver hat die klassische Produktlogik perfektioniert: weniger Ablenkung, klare Tastaturfokus-Sichtbarkeit, Verlässlichkeit in Multi-Monitor- und Automationsszenarien. Monocle und Hush haben gezeigt, dass Nutzer aber auch für eine weichere, „ruhigere“ Ästhetik bezahlen, wenn sich die App wie ein nativer Teil von macOS anfühlt und nicht wie ein schwarzer Vorhang über dem Desktop. Focusdim wiederum belegt, dass die Mischung aus **Dim + Blur + Border** besonders wertvoll ist, weil sie sowohl kognitiven Fokus als auch Orientierung innerhalb komplexer Workspaces stärkt. citeturn32view0turn3view4turn16view1turn3view2
+
+Die überzeugendste Produktidee wäre daher ein **dreimodales UX-System** mit klaren mentalen Modellen: **Studio** für no-permission Dim/Border, **Deep** für optionales Blur und visuelle Isolation, **Share** für Screen-Sharing, Privacy und Präsentationen. Diese drei Modi decken fast das gesamte wettbewerbliche Spektrum ab, das heute auf mehrere Apps verteilt ist: HazeOvers Workflow-Fokus, Monocles Calm-Blur, Hushs Sharing-Sicherheit und Faders permission-freie Simplizität. Der Nutzer müsste nicht mehr zwischen mehreren Philosophien wählen, sondern nur zwischen Intensitätsstufen derselben App. citeturn32view3turn3view4turn16view1turn16view0
+
+**Wo sich echte Differenzierung erzielen lässt, ist vor allem die Accessibility- und Semantik-Ebene.** Mehrere relevante Konkurrenten haben im App Store keine Accessibility-Funktionen deklariert, während HazeOver und Hush diese explizit ausweisen. Gleichzeitig zeigen Reviews den Wunsch nach intelligenteren Regeln: aktive App statt aktives Fenster, per-App-Ausnahmen, nicht nur globale Intensitätsregler, sondern regelbasierte Zustände. Ein Produkt, das Accessibility-Optionen wie Reduced Motion, hohen Kontrast, größere Fokusrahmen, farbunabhängige Orientierung und klare VoiceOver-Beschriftung ernst nimmt, kann sich sowohl funktional als auch vertrauensseitig deutlich absetzen. citeturn6view2turn17view3turn10view2turn9view0turn16view1
+
+| Feature | Nutzerwirkung | Implementierungsaufwand | Priorität | Begründung |
+|---|---|---:|---|---|
+| Active Window Dimming | Sehr hoch | Niedrig bis mittel | **MVP** | Kernnutzen der Kategorie; ohne das existiert das Produkt nicht. |
+| Active App Mode | Hoch | Niedrig | **MVP** | In Reviews und Konkurrenzangeboten wiederkehrend; vermeidet Frust bei Multi-Window-Apps. citeturn3view3turn16view1 |
+| Per-App-Ausnahmen und „Pin this app“ | Sehr hoch | Niedrig | **MVP** | Wiederholt gewünschte Whitelist-Logik; fast alle reifen Produkte bieten Varianten davon. citeturn3view2turn3view3turn16view0turn16view1 |
+| Border Highlight statt nur Dimming | Hoch | Niedrig | **MVP** | Starker Orientierungsvorteil; günstiger als Blur. citeturn3view2turn32view0 |
+| Multi-Display mit Per-Screen / Global | Sehr hoch | Mittel | **MVP** | Schwerer Qualitätsfaktor; reifere Produkte investieren hier sichtbar. citeturn3view3turn33search0turn10view0 |
+| Reduced Motion, hoher Kontrast, farbunabhängige Orientierung | Hoch | Niedrig bis mittel | **MVP** | Unterversorgter Differenzierer mit hohem Reputationswert. citeturn6view2turn17view3 |
+| Optionaler Blur | Hoch | Mittel bis hoch | **Post-MVP früh** | Deutliche Differenzierung, aber Permission- und Performance-kritisch. citeturn23search4turn21search2 |
+| Screen-Share-Autodetektion | Hoch | Mittel | **Post-MVP früh** | Öffnet zweiten Use Case und rechtfertigt höheren Preis. citeturn16view1 |
+| Selected Apps Mode | Hoch | Mittel | **Post-MVP früh** | Kombiniert Fokus und Präsentation; von Hush bereits validiert. citeturn16view1 |
+| Stage-Manager-spezifische Semantik | Mittel bis hoch | Mittel bis hoch | **Post-MVP früh** | Kritisch für Power User; hoher QA-Wert. citeturn33search0turn28search3 |
+| Focus Filters und Shortcuts | Mittel bis hoch | Mittel | **Roadmap** | Starker Pro-/Power-User-Hebel; HazeOver zeigt echten Marktwert. citeturn32view3turn25search0 |
+| Raycast-Integration | Mittel | Niedrig bis mittel | **Roadmap** | Gute Distribution und Workflow-Story für Tech-Power-User. citeturn13search4 |
+| App Groups | Mittel | Mittel | **Roadmap** | Für Designer/Dev-Workflows sinnvoll, aber nicht nötig für MVP. citeturn33search0 |
+| Presets nach Kontext | Mittel | Mittel | **Roadmap** | Für Studium, Schreiben, Präsentation, Nachtmodus stark, aber später. |
+
+Ein besonders attraktiver Edge liegt in **Integrationen und Partnerschaften**. HazeOver ist bereits auf Setapp und unterstützt Shortcuts/Focus Filters; Monocle ist über Homebrew und Raycast anschlussfähig. Ein neuer Wettbewerber kann hier schneller sein, wenn er früh **Shortcuts**, **Focus Filters**, **Raycast**, **Homebrew** und später **Setapp** verbindet. Das schafft nicht nur Funktionsmehrwert, sondern auch zusätzliche Distributionskanäle und Community-Einstiegspunkte. citeturn3view0turn5search0turn32view3turn13search2turn13search4
+
+## Monetarisierung und Go-to-Market
+
+Der Markt bevorzugt klar **Einmalpreise**. HazeOver liegt bei 4,99 US-Dollar, Window Focus ebenfalls, Focusdim monetarisiert sein Pro-Upgrade für 4,99 US-Dollar, Fader kostet ebenfalls 4,99 US-Dollar, Hush Pro liegt bei 8,99 US-Dollar und Monocle wird aktuell in Berichterstattung ungefähr bei 9 US-Dollar verortet. Das einzige sichtbare Abo im engeren Vergleichsfeld ist HokusFokus — und dort ist das Produkt funktional bereits breiter als reine Fensterfokussierung. Daraus folgt: Für eine fokussierte Active-Window-App ist ein Abo ohne deutlich erweiterten Surface Area wahrscheinlich der schwerere Weg. citeturn5search0turn9view0turn10view1turn16view0turn17view2turn4view0turn0search13
+
+| Modell | Marktbelege | Einschätzung |
+|---|---|---|
+| **One-time paid** | HazeOver 4,99 US$, Window Focus 4,99 US$, Fader 4,99 US$, Hush Pro 8,99 US$, Monocle ca. 9 US$ citeturn5search0turn9view0turn16view0turn17view2turn0search13 | Standardmodell der Kategorie; einfach kommunizierbar, geringe Kaufbarriere, gut für Utilities. |
+| **Freemium + One-time upgrade** | Focusdim ist free to start mit 4,99-US$-Pro-IAP; Hush bietet Free Desktop Mode plus 5-Tage-Test und One-time Pro citeturn10view1turn16view1turn17view2 | Wahrscheinlich das stärkste Modell für einen neuen Marktteilnehmer. |
+| **Subscription** | HokusFokus 1,99 US$/Monat oder 14,99 US$/Jahr citeturn4view0turn4view2 | Nur sinnvoll, wenn die App sich zu einer breiteren Workspace-/Declutter-Suite entwickelt. |
+| **Bundle/Channel Subscription** | HazeOver ist zusätzlich über Setapp verfügbar citeturn3view0turn3view1turn5search0 | Interessant als sekundärer Kanal nach Erreichen von PMF. |
+| **Education / Student Pricing** | HazeOver erwähnt Student Discount auf der offiziellen Buy-Seite citeturn5search0 | Sehr passend für Studium, Bildung und preisbewusste Power User. |
+
+Für den Marktstart ist die überzeugendste Kombination **App Store + Direktvertrieb**. Der App Store liefert Discovery, Reviews, Familienfreigabe und reibungsarme IAP-Flows; der Direktvertrieb ermöglicht dagegen einen saubereren Vollfunktions-Test, flexiblere Preisexperimente, Homebrew-Distribution und später eventuell Team-/Education-Lizenzen. HazeOver zeigt, dass eine Hybridstrategie gut funktioniert; Monocle zeigt, dass auch Direct + Homebrew eine identitätsstarke Nische besetzen kann; Hush und Focusdim zeigen, dass Freemium im App Store in dieser Kategorie funktioniert. citeturn3view1turn13search2turn16view1turn10view1
+
+Die Preisstrategie sollte deshalb nicht auf „billiger als HazeOver“ reduziert werden. Besser ist ein **scharf segmentiertes Angebot**: kostenloses Core-Dimming, Pro-Upgrade für Blur/Sharing/Advanced Rules, später ein Education-Preis und optional ein Direktvertrieb mit 14-Tage-Pro-Test. Marktgerecht erscheint ein Preisfenster von **6,99–9,99 Euro** für Pro als glaubhafte Mitte: oberhalb der 4,99-Dollar-Commodity-Utilities, aber klar unter dem Preisniveau, das Nutzer mit einer komplexeren Productivity-Suite assoziieren würden. Diese Empfehlung ist eine strategische Ableitung aus den sichtbaren Preisankern des Marktes. citeturn5search0turn9view0turn10view1turn17view2turn4view2
+
+Die folgende Onboarding- und Monetisierungslogik passt am besten zu den beobachteten Marktreaktionen auf Permissions, Preisfriktion und Produktwert:
+
+```mermaid
+flowchart TD
+    A[Erster Start] --> B{Welchen Modus will der Nutzer?}
+    B -->|Sofort fokussieren| C[Studio Mode aktivieren]
+    B -->|Blur oder Screen Share| D[Deep oder Share erklären]
+    C --> E[Kein Screen Recording nötig]
+    E --> F[Wertmoment: aktives Fenster sofort klar]
+    F --> G[Upsell nach Use-Case Event]
+    D --> H[Screen-Recording-Berechtigung transparent erklären]
+    H --> I{Berechtigung erteilt?}
+    I -->|Ja| J[Deep oder Share Mode freischalten]
+    I -->|Nein| K[Fallback auf Studio Mode]
+    J --> L[5 bis 14 Tage Volltest]
+    L --> M[Einmaliger Pro-Kauf]
+    G --> M
+    K --> N[Späterer Re-Entry in Deep oder Share]
+```
+
+Diese Logik folgt direkt aus der Marktrealität: Produkte ohne zusätzliche Permissions wie Fader minimieren Friktion, während Hush für Blur klar Screen Recording erklärt und einen zeitlich begrenzten Pro-Test anbietet; Focusdim beweist, dass ein großzügiger kostenloser Kernmodus die Grundakzeptanz erhöht. citeturn16view0turn16view1turn10view1
+
+**Vorgeschlagene Marketing-Positionierung**
+
+Variante für Deep Work:
+
+> Weniger visuelles Rauschen. Mehr Klarheit.
+> Hebe das Fenster hervor, das gerade zählt — ohne deinen Workflow umzubauen.
+
+Variante für Screen Sharing:
+
+> Teile deinen Bildschirm, ohne an dein Chaos zu denken.
+> Verberge alles, was nicht gezeigt werden soll, automatisch und elegant.
+
+Variante für Accessibility und Calm Computing:
+
+> Fokus, der sich an dein Gehirn anpasst.
+> Dimmen, Rahmen, Blur und kontraststarke Modi — von sanft bis kompromisslos.
+
+**Vorgeschlagene App-Store-Description in kurzer Form**
+
+Variante A:
+
+> Halte deine Augen auf dem Fenster, das wichtig ist.
+> [Produktname] dimmt oder hebt alles hervor, was gerade nicht relevant ist — schnell, lokal und ohne unnötige Reibung. Nutze Active Window, Active App oder Selected Apps, arbeite über mehrere Monitore hinweg und schalte bei Bedarf auf Blur oder Screen-Share-Modus um.
+
+Variante B:
+
+> Ein ruhigerer Mac in Sekunden.
+> Dimme Ablenkungen, markiere das aktive Fenster, behalte bestimmte Apps sichtbar und mache deinen Bildschirm präsentationsbereit — ohne neugierige Blicke auf Desktop, Chats oder andere offene Fenster.
+
+## Recht, Datenschutz und Security
+
+Rechtlich und compliance-seitig ist die Kategorie relativ beherrschbar, **wenn das Produkt lokal-first gebaut wird**. Für den EU-Raum ist die wichtigste normative Leitidee die DSGVO-Logik von **Datensparsamkeit** und **Data Protection by Design and by Default**. Genau diese Richtung passt auch operativ perfekt zu diesem Produkttyp: Einstellungen lokal speichern, keine Accounts erzwingen, Blur-Frames nicht übertragen, keine Screen-Capture-Daten persistieren, Support-Daten nur explizit und manuell exportierbar machen. Artikel 25 der DSGVO fordert genau diese Gestaltungslogik, und Apples App-Privacy-System macht sie zudem unmittelbar am Point of Sale sichtbar. citeturn29search3turn29search4turn29search2turn29search11
+
+Für den App Store ist die Privacy-Kommunikation ein echtes Wettbewerbsfeld. Apple verlangt, dass Entwickler Privacy-Informationen in App Store Connect pflegen und einen Privacy-Policy-Link bereitstellen. Im Markt sieht man dabei eine scharfe Spaltung: HazeOver, Focusdim, Hush, HokusFokus und Fader deklarieren „Data Not Collected“, während Window Focus Contact Info und Diagnostics ausweist und Blurred nicht einmal aktuelle Privacy-Practices bei Apple hinterlegt. Für einen neuen Wettbewerber ist ein glaubwürdiges „No data collected“ daher nicht bloß rechtlich sauber, sondern ein klarer Conversion-Vorteil. citeturn29search5turn29search9turn6view3turn10view1turn17view3turn34view0turn16view0turn9view0turn4view6
+
+Für den Direktvertrieb außerhalb des App Store ist **Notarisierung** Pflicht: Apple dokumentiert, dass seit macOS 10.15 Developer-ID-signierte, nach dem 1. Juni 2019 gebaute Software vor Verteilung notarisiert werden muss; für diesen Weg ist außerdem der Hardened Runtime relevant. Wer also neben dem App Store auch Trial, Homebrew oder eine eigene Kaufseite anbieten will, braucht von Anfang an eine saubere Signing-/Notarization-Pipeline. citeturn23search3turn23search10turn23search26
+
+Sicherheits- und UX-seitig ist der zentrale Designgrundsatz: **Permissions progressiv und belegt anfordern**. Hush zeigt, dass Screen Recording für Blur im Store kommunizierbar ist, wenn der Nutzen klar erklärt wird; Fader zeigt gleichzeitig, dass ein guter Fokusnutzen auch ganz ohne Accessibility- oder Screen-Recording-Permission möglich ist. Darum sollte die App niemals beim ersten Start unnötig Berechtigungen verlangen. Das beste Muster wäre: Core-Modus ohne Zusatzrechte aktivieren, Blur und Sharing erst bei klarer Nutzerabsicht erklären und anfordern, Accessibility nur dann, wenn wirklich zusätzliche AX-Funktionen implementiert werden, die nicht anders erreichbar sind. citeturn16view1turn17view4turn16view0turn24search1
+
+Markenrechtlich ist außerdem Vorsicht geboten. HazeOver weist auf seiner Kaufseite ausdrücklich darauf hin, dass **HazeOver** und **Distraction Dimmer** Marken von Maxim Ananov sind. Ein neues Produkt sollte deshalb weder im Namen noch in der Metadaten-Strategie unnötig nah an diese Kennzeichen heranrücken. Sinnvoller ist eine klare Eigenpositionierung über Fokus, Screen Sharing, Calm Computing oder Visual Focus. citeturn5search0
+
+Empfehlenswert wäre zudem, Accessibility formal sichtbar zu machen, nicht nur technisch. HazeOver und Hush deklarieren konkrete Accessibility-Features im App Store; andere Wettbewerber lassen dieses Feld leer. Das ist eine kleine, aber reale Lücke: Wer VoiceOver, Voice Control, Reduced Motion und hohen Kontrast sauber dokumentiert, baut nicht nur ein besseres Produkt, sondern sendet auch ein starkes Trust-Signal an Nutzer und Enterprise-/Education-Buyer. citeturn6view2turn17view3turn9view0turn10view2turn16view0
+
+## Roadmap, KPIs, Aufwand und Kosten
+
+Das sinnvollste MVP ist **nicht** „voller Monocle-plus-Hush-Nachbau“, sondern ein primitives, extrem zuverlässiges Produkt mit klarer Erweiterungslinie. Das MVP sollte den klassischen HazeOver-Job besser erledigen als die meisten heutigen Alternativen: aktives Fenster oder aktive App hervorheben, auf mehreren Displays sauber funktionieren, pro App ausnehmen können, gute Animationen bieten, Accessibility ernst nehmen und ohne Screen-Recording-Recht sofort nutzbar sein. Blur, Screen-Share-Autodetektion und tiefere Integrationen sollten bewusst als zweite Welle kommen. Diese Priorisierung spiegelt die im Markt am häufigsten gelobten und am häufigsten kritisierten Aspekte direkt wider. citeturn1search15turn9view0turn16view1turn21search2turn10view0
+
+Die folgende 6–12-Monats-Roadmap ist dafür realistisch:
+
+```mermaid
+gantt
+    title Produkt-Roadmap für 12 Monate
+    dateFormat  YYYY-MM-DD
+    section MVP
+    Core Dimming, Active App, Exclusions, Multi-Display, Accessibility :a1, 2026-07-15, 70d
+    App Store / Direct Distribution, Signing, Notarization, Pricing :a2, 2026-08-01, 45d
+    section Ausbau
+    Optional Blur via ScreenCaptureKit :b1, 2026-10-01, 45d
+    Share Mode mit Selected Apps und Present-Safe Overlay :b2, 2026-10-15, 50d
+    Shortcuts und Focus Filters :b3, 2026-11-01, 35d
+    section Reife
+    Stage-Manager-Polish und Split-View-Hardening :c1, 2026-12-01, 45d
+    Raycast / Homebrew / Setapp Exploration :c2, 2027-01-10, 40d
+    Education- und Team-Lizenzen, Presets, App Groups :c3, 2027-02-01, 55d
+```
+
+Diese Roadmap stützt sich auf die Marktbeobachtung, dass besonders Blur-, Sharing- und Stage-Manager-Funktionen eine spürbar höhere technische und QA-Komplexität erzeugen, während Core-Dimming, Exclusions und Active-App-Semantik den Großteil des fundamentalen Nutzens bereits liefern. citeturn23search4turn33search0turn10view0turn17view0
+
+**Priorisierter MVP-Umfang**
+
+Ein belastbarer MVP sollte aus folgenden Blöcken bestehen: Dimming mit justierbarer Intensität und Farbe, Active Window/Active App, App-Ausnahmen, Per-Screen-Logik, Border Highlight, Launch at Login, Hotkey, Reduced Motion, High Contrast und ein minimaler App-Store-/Direktvertriebs-Paywall-Flow. Das ist genug, um gegen HazeOver und Window Focus ernsthaft anzutreten und sich gleichzeitig über Modernität und Accessibility von älteren Produkten abzusetzen. **Nicht** in den ersten Sprint gehören komplexe Blur-Pipelines für alte Systeme, App Groups, Screen-Share-Autodetektion für alle Call-Apps oder tiefe Integrations-Ökosysteme. citeturn32view0turn3view3turn10view0turn16view1
+
+| KPI | Warum relevant | Zielkorridor für frühe Phase |
+|---|---|---|
+| Install-to-Activation Rate | Misst, ob App und Positionierung verständlich sind | > 70 % bis erster Fokusmodus |
+| Permission Grant Rate für Blur/Share | Kritisch für Premium-Feature-Adoption | > 55 % bei Nutzern, die Deep/Share anklicken |
+| D7-Retention | Utility-Produkt muss schnell Habit bilden | 25–40 % |
+| D30-Retention | Zeigt echten Workflow-Fit | 15–25 % |
+| Free-to-Pro-Conversion | Kernkommerzialisierung bei Freemium | 3–8 % in früher Phase, höher bei Power-User-Traffic |
+| Share-Mode-Nutzung pro aktivem Nutzer | Validiert zweite Positionierung jenseits von Deep Work | > 15 % der MAU |
+| Crash-free sessions | Vertrauen ist in dieser Kategorie zentral | > 99,5 % |
+| Performance-Beschwerden pro 1.000 Sessions | Blur-Produkte sterben an Hitze/GPU-Frust | So niedrig wie möglich; ideal < 3 |
+| Multi-Display-Fehlerquote | Hohe Kauffrustration bei Power Usern | Stark monitoren, bereits ab Beta |
+| App-Store-Rating | Utilities werden stark review-getrieben entdeckt | 4,6+ |
+
+**Geschätzter Aufwand und modellierte Kosten**
+
+Die folgenden Zahlen sind **Modellannahmen**, keine externen Marktpreise. Sie setzen ein erfahrenes macOS-Team oder einen starken Founder mit ergänzender Design-/QA-Kapazität voraus und rechnen mit einer groben, blended Person-Monatskostenbasis von etwa **10.000 bis 18.000 Euro**.
+
+| Umfang | Inhalt | Geschätzter Aufwand | Modellierte Kosten |
+|---|---|---:|---:|
+| **Lean MVP** | Core-Dimming, Active App, Exclusions, Multi-Display, Border, Basiseinstellungen, App-Store-/Direct-Build | **4–6 Person-Monate** | **40.000–108.000 €** |
+| **MVP Plus** | Lean MVP plus Blur auf 12.3+, Paywall, Trial, Accessibility-Polish, Stabilitäts-QA | **6–8 Person-Monate** | **60.000–144.000 €** |
+| **Vollprodukt** | MVP Plus plus Share Mode, Selected Apps, Shortcuts/Focus Filters, Stage-Manager-Hardening, Integrationen | **9–15 Person-Monate** | **90.000–270.000 €** |
+
+Wenn das Team klein ist, ist die wichtigste Entscheidung nicht das Budget, sondern **der Scope-Disziplinpunkt**: Die Kategorie verführt dazu, zu früh Blur, Screen Sharing, Presets, Stage Manager, Homebrew, Setapp, App Groups und mehrere Vertriebsmodelle gleichzeitig zu bauen. Der stärkere Weg ist, zuerst ein Produkt zu liefern, das Nutzer nach drei Sekunden Installation spürbar ruhiger arbeiten lässt — und erst danach die Premium- und Ökosystem-Layer aufzulegen. Genau dieser Fokus trennt in diesem Markt reife Utilities von halb-fertigen Experimenten. citeturn16view0turn16view1turn10view0turn30view0
+
+Die attraktivsten **Business Opportunities** für die Monate danach liegen in vier Richtungen. Erstens in **Education**: HazeOver erwähnt Student Discounts, und der Produktfit für Studium, Schreiben und Prüfungsvorbereitung ist hoch. Zweitens in **Enterprise/Knowledge-Work**: Screen-Sharing-sichere Präsentationsmodi und lokal-first-Privacy vereinfachen interne Freigaben. Drittens in **Accessibility/Neurodiversity**: Fader adressiert ADHD und sensorische Sensitivitäten offen, während der Markt Accessibility formell noch nicht konsequent besetzt. Viertens in **Integrations-Partnerschaften** mit Setapp, Raycast und Power-Workflow-Ökosystemen. Das sind die Hebel, mit denen aus „noch einer Utility“ ein verteidigbares, besser positioniertes Produkt werden kann. citeturn5search0turn16view0turn17view3turn3view0turn13search4
