@@ -36,11 +36,13 @@ final class OverlayWindowController {
     /// clipped by the mask edge.
     private let edgePadding: CGFloat = 2
 
-    /// Small zone at the bottom of each display left uncovered so the
-    /// auto-hidden Dock slides up over the real desktop instead of the
-    /// blurred overlay. Kept small (roughly the Dock tile size plus glass
-    /// padding) so it is barely noticeable when the Dock is hidden.
-    private let dockZoneHeight: CGFloat = 40
+    /// Small zone at the bottom of each display where the overlay fades
+    /// to transparent via a gradient mask. The auto-hidden Dock slides up
+    /// into this zone and composites against the real desktop, not the
+    /// blurred overlay. The smooth transition avoids the harsh edge that
+    /// causes visible halos when the Dock's glass background straddles
+    /// the overlay boundary.
+    private let dockFadeHeight: CGFloat = 25
 
     init(screen: NSScreen) {
         self.screen = screen
@@ -48,19 +50,9 @@ final class OverlayWindowController {
 
     // MARK: - Window Lifecycle
 
-    /// Frame the overlay sits in, in screen coordinates. The bottom
-    /// `dockZoneHeight` points are excluded so the Dock has a clean surface
-    /// to composite against.
-    private var overlayFrame: CGRect {
-        var f = screen.frame
-        f.size.height -= dockZoneHeight
-        f.origin.y += dockZoneHeight
-        return f
-    }
-
     private func ensureWindow() {
         guard window == nil else { return }
-        let frame = overlayFrame
+        let frame = screen.frame
 
         let w = NSWindow(
             contentRect: frame,
@@ -85,18 +77,32 @@ final class OverlayWindowController {
         let content = CALayer()
         content.frame = CGRect(origin: .zero, size: frame.size)
         content.contentsGravity = .resize
-        // Deep mode deliberately hands this layer a low-resolution image.
-        // Linear filtering gives it a soft, natural enlargement without a
-        // separate full-display Metal upscale pass every frame.
         content.magnificationFilter = .linear
         content.minificationFilter = .linear
         content.isOpaque = false
         w.contentView?.layer?.addSublayer(content)
 
+        // Compound mask: shape layer (white fill + window cutout hole)
+        // topped by a gradient that fades to black at the bottom edge,
+        // making the mask transparent where the Dock needs clear desktop.
+        let maskContainer = CALayer()
+        maskContainer.frame = CGRect(origin: .zero, size: frame.size)
+
         let mask = CAShapeLayer()
         mask.fillRule = .evenOdd
-        mask.frame = CGRect(origin: .zero, size: frame.size)
-        content.mask = mask
+        mask.fillColor = CGColor(gray: 1, alpha: 1)
+        mask.frame = maskContainer.bounds
+        maskContainer.addSublayer(mask)
+
+        let fade = CAGradientLayer()
+        fade.frame = CGRect(x: 0, y: 0, width: frame.width, height: dockFadeHeight)
+        fade.colors = [CGColor(gray: 0, alpha: 1), CGColor(gray: 1, alpha: 1)]
+        fade.locations = [0, 1]
+        fade.startPoint = CGPoint(x: 0.5, y: 1)
+        fade.endPoint = CGPoint(x: 0.5, y: 0)
+        maskContainer.addSublayer(fade)
+
+        content.mask = maskContainer
 
         self.window = w
         self.contentLayer = content
@@ -119,14 +125,14 @@ final class OverlayWindowController {
     private func updateMask() {
         guard let mask = maskLayer else { return }
 
-        let local = CGRect(origin: .zero, size: overlayFrame.size)
+        let local = CGRect(origin: .zero, size: screen.frame.size)
         let path = CGMutablePath()
         path.addRect(local)
 
         if let cf = cutoutFrame, !cf.isNull, cf.width > 0, cf.height > 0 {
             // Convert global AppKit frame to this overlay's local space.
-            let originX = cf.minX - overlayFrame.minX - edgePadding
-            let originY = cf.minY - overlayFrame.minY - edgePadding
+            let originX = cf.minX - screen.frame.minX - edgePadding
+            let originY = cf.minY - screen.frame.minY - edgePadding
             var hole = CGRect(
                 x: originX,
                 y: originY,
