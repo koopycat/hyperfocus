@@ -29,11 +29,6 @@ final class OverlayWindowController {
     /// the whole screen (no hole).
     private var cutoutFrame: CGRect?
 
-    /// Zone at the bottom of the display reserved for the Dock. When the
-    /// overlay covers this area the auto-hidden Dock reveals a blurred
-    /// surface instead of the real desktop during its slide-up animation.
-    private var dockCutoutFrame: CGRect?
-
     /// Rounded-corner radius matching macOS window corners.
     private let cornerRadius: CGFloat = 10
 
@@ -60,7 +55,7 @@ final class OverlayWindowController {
         w.isOpaque = false
         w.hasShadow = false
         w.backgroundColor = .clear
-        w.level = NSWindow.Level(rawValue: 19)
+        w.level = NSWindow.Level(rawValue: 21)  // above Dock (20), below menu bar (24)
         w.ignoresMouseEvents = true
         w.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         w.sharingType = .none
@@ -104,12 +99,6 @@ final class OverlayWindowController {
         updateMask()
     }
 
-    /// Reserve the bottom strip where the Dock appears so the real desktop
-    /// shows through. Call with a rect in this overlay's local coordinates.
-    func setDockCutout(_ frame: CGRect?) {
-        dockCutoutFrame = frame
-        updateMask()
-    }
 
     private func updateMask() {
         guard let mask = maskLayer else { return }
@@ -136,10 +125,6 @@ final class OverlayWindowController {
                     cornerHeight: cornerRadius
                 )
             }
-        }
-
-        if let df = dockCutoutFrame, !df.isNull, df.width > 0, df.height > 0 {
-            path.addRect(df)
         }
 
         mask.path = path
