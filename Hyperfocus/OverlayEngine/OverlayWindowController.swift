@@ -64,7 +64,7 @@ final class OverlayWindowController {
         w.isOpaque = false
         w.hasShadow = false
         w.backgroundColor = .clear
-        w.level = NSWindow.Level(rawValue: 25)  // above menu bar (24)
+        w.level = NSWindow.Level(rawValue: 19)  // above menu bar (24)
         w.ignoresMouseEvents = true
         w.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         w.sharingType = .none
