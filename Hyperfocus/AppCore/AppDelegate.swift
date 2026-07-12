@@ -140,7 +140,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mouseTracker?.stop()
         shakeDetector?.stop()
         blurEngine?.detachAll()
-        NSApp.presentationOptions = []
 
         NotificationCenter.default.removeObserver(self)
         UserDefaults.standard.removeObserver(self, forKeyPath: "launchAtLogin")
@@ -163,7 +162,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         displayManager?.configureForAllScreens()
         activeWindowTracker?.startFrameTracking()
         mouseTracker?.start()
-        NSApp.presentationOptions = [.autoHideMenuBar]
         if selectedMode == .deep && currentMode != .deep {
             isSynchronizingFocusMode = true
             UserDefaults.standard.set(HyperfocusMode.studio.rawValue, forKey: Self.focusModeKey)
@@ -187,7 +185,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hasAttachedBlurEngine = false
         activeWindowTracker?.stopFrameTracking()
         mouseTracker?.stop()
-        NSApp.presentationOptions = []
         blurEngine?.detachAll()
         for overlay in displayManager?.allOverlays() ?? [] {
             overlay.hide()
