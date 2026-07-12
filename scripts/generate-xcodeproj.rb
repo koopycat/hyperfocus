@@ -46,6 +46,7 @@ files = {
   'OverlayWindowController.swift' => [overlay_engine_group, sources_phase_ref],
   'DisplayManager.swift'          => [overlay_engine_group, sources_phase_ref],
   'ActiveWindowTracker.swift'     => [overlay_engine_group, sources_phase_ref],
+  'MouseTracker.swift'           => [overlay_engine_group, sources_phase_ref],
   'BlurEngine.swift'              => [render_pipeline_group, sources_phase_ref],
   'MetalBlurRenderer.swift'       => [render_pipeline_group, sources_phase_ref],
   'BlurDesatShaders.metal'        => [render_pipeline_group, sources_phase_ref],
@@ -124,6 +125,7 @@ IO.write(PROJECT_FILE, <<~PBXPROJ)
 				#{file_refs['OverlayWindowController.swift']} /* OverlayWindowController.swift */,
 				#{file_refs['DisplayManager.swift']} /* DisplayManager.swift */,
 				#{file_refs['ActiveWindowTracker.swift']} /* ActiveWindowTracker.swift */,
+				#{file_refs['MouseTracker.swift']} /* MouseTracker.swift */,
 			);
 			path = OverlayEngine;
 			sourceTree = "<group>";

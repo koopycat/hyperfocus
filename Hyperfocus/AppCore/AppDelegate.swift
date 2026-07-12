@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var displayManager: DisplayManager?
     private var activeWindowTracker: ActiveWindowTracker?
     private var blurEngine: BlurEngine?
+    private var mouseTracker: MouseTracker?
     private var shakeDetector: ShakeDetector?
     private let licenseManager = LicenseManager.shared
     private var onboardingWindow: NSWindow?
@@ -41,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         menuBarController = MenuBarController()
         activeWindowTracker = ActiveWindowTracker()
+        mouseTracker = MouseTracker()
         displayManager = DisplayManager()
         blurEngine = BlurEngine()
 
@@ -48,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeWindowTracker?.onWindowFrameChanged = { [weak self] frame in
             guard let self, self.isFocusActive, !self.isHiddenForExclusion else { return }
             self.applyCutout(frame)
+            self.mouseTracker?.windowFrame = frame
         }
         activeWindowTracker?.onFrontmostApplicationChanged = { [weak self] _ in
             self?.updatePresentationForFrontmostApplication()
@@ -59,6 +62,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         activeWindowTracker?.onWindowDragEnded = { [weak self] in
+            guard let self, self.isFocusActive else { return }
+            self.mouseTracker?.windowFrame = self.activeWindowTracker?.currentFrontmostWindowFrame
+            guard self.mouseTracker?.isMouseInsideWindow != false else { return }
+            self.showFocusPresentation()
+        }
+
+        mouseTracker?.onMouseExitedWindow = { [weak self] in
+            guard let self, self.isFocusActive else { return }
+            for overlay in self.displayManager?.allOverlays() ?? [] {
+                overlay.hide()
+            }
+        }
+        mouseTracker?.onMouseEnteredWindow = { [weak self] in
             guard let self, self.isFocusActive else { return }
             self.showFocusPresentation()
         }
@@ -121,8 +137,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         displayManager?.removeAllOverlays()
         activeWindowTracker?.stop()
+        mouseTracker?.stop()
         shakeDetector?.stop()
         blurEngine?.detachAll()
+        NSApp.presentationOptions = []
 
         NotificationCenter.default.removeObserver(self)
         UserDefaults.standard.removeObserver(self, forKeyPath: "launchAtLogin")
@@ -144,6 +162,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isHiddenForExclusion = false
         displayManager?.configureForAllScreens()
         activeWindowTracker?.startFrameTracking()
+        mouseTracker?.start()
+        NSApp.presentationOptions = [.autoHideMenuBar]
         if selectedMode == .deep && currentMode != .deep {
             isSynchronizingFocusMode = true
             UserDefaults.standard.set(HyperfocusMode.studio.rawValue, forKey: Self.focusModeKey)
@@ -166,6 +186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isHiddenForExclusion = false
         hasAttachedBlurEngine = false
         activeWindowTracker?.stopFrameTracking()
+        mouseTracker?.stop()
+        NSApp.presentationOptions = []
         blurEngine?.detachAll()
         for overlay in displayManager?.allOverlays() ?? [] {
             overlay.hide()
