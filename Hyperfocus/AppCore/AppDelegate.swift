@@ -98,6 +98,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.addObserver(
             self, forKeyPath: Self.focusModeKey, options: .new, context: nil
         )
+        UserDefaults.standard.addObserver(
+            self, forKeyPath: "blurFPS", options: .new, context: nil
+        )
         updateLaunchAtLogin()
 
         if !UserDefaults.standard.bool(forKey: Self.hasCompletedOnboardingKey) {
@@ -116,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.shakeEnabledKey)
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.shakeSensitivityKey)
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.focusModeKey)
+        UserDefaults.standard.removeObserver(self, forKeyPath: "blurFPS")
     }
 
     // MARK: - Focus Toggle
@@ -396,6 +400,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         case Self.focusModeKey:
             guard isFocusActive, !isSynchronizingFocusMode else { return }
+            deactivateFocus()
+            activateFocus()
+        case "blurFPS":
+            guard isFocusActive, currentMode == .deep else { return }
             deactivateFocus()
             activateFocus()
         default:

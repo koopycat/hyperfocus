@@ -24,6 +24,7 @@ struct HyperfocusSettings: Codable {
     var shakeSensitivity: Double
     var launchAtLogin: Bool
     var focusMode: String?
+    var blurFPS: Int
     var excludedApps: [String]
     var appGroups: [NamedGroup]
     var perDisplay: [DisplaySetting]
@@ -40,6 +41,7 @@ extension HyperfocusSettings {
             shakeSensitivity: defaults.object(forKey: "shakeSensitivity") as? Double ?? 3000,
             launchAtLogin: defaults.bool(forKey: "launchAtLogin"),
             focusMode: defaults.string(forKey: "hyperfocusMode"),
+            blurFPS: defaults.integer(forKey: "blurFPS"),
             excludedApps: (try? JSONDecoder().decode([String].self, from: defaults.data(forKey: "excludedApps") ?? Data())) ?? [],
             appGroups: (try? JSONDecoder().decode([NamedGroup].self, from: defaults.data(forKey: "appGroups") ?? Data())) ?? [],
             perDisplay: (try? JSONDecoder().decode([DisplaySetting].self, from: defaults.data(forKey: "perDisplaySettings") ?? Data())) ?? []
@@ -55,6 +57,7 @@ extension HyperfocusSettings {
         defaults.set(shakeSensitivity, forKey: "shakeSensitivity")
         defaults.set(launchAtLogin, forKey: "launchAtLogin")
         defaults.set(focusMode, forKey: "hyperfocusMode")
+        defaults.set(blurFPS, forKey: "blurFPS")
         defaults.set(try? JSONEncoder().encode(excludedApps), forKey: "excludedApps")
         defaults.set(try? JSONEncoder().encode(appGroups), forKey: "appGroups")
         defaults.set(try? JSONEncoder().encode(perDisplay), forKey: "perDisplaySettings")
@@ -194,6 +197,7 @@ struct EffectsTab: View {
     @Binding var blurRadius: Double
     @Binding var saturation: Double
     @Binding var selectedTint: Color
+    @AppStorage("blurFPS") private var blurFPS: Int = 10
 
     var body: some View {
         Form {
@@ -211,6 +215,18 @@ struct EffectsTab: View {
                     .font(.body)
                 Slider(value: $saturation, in: 0...1, step: 0.05)
                 Text("0% = full grayscale background")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Blur Frame Rate: \(blurFPS) FPS")
+                    .font(.body)
+                Slider(value: Binding(
+                    get: { Double(blurFPS) },
+                    set: { blurFPS = Int($0) }
+                ), in: 1...30, step: 1)
+                Text("Lower = less GPU / more battery")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

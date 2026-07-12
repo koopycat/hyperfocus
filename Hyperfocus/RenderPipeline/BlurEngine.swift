@@ -20,9 +20,14 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     private var renderer: MetalBlurRenderer?
     private var displayOverlays: [CGDirectDisplayID: OverlayWindowController] = [:]
 
-    /// The background is visually obscured, so ten fresh frames per second
-    /// remain smooth while substantially reducing capture and GPU work.
-    private let targetFramesPerSecond: Int32 = 10
+    /// Frame rate for ScreenCaptureKit streams. User-configurable in
+    /// Settings → Effects; defaults to 10 for a good energy/smoothness
+    /// balance on most Macs.
+    private var framesPerSecond: Int32 {
+        let raw = UserDefaults.standard.integer(forKey: "blurFPS")
+        return Int32(min(max(raw, 1), 30))
+    }
+
     private let captureScale: CGFloat = 4
     private let maximumCaptureBlurRadius: CGFloat = 12
     private let sampleHandlerQueue = DispatchQueue(
@@ -254,7 +259,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             let config = SCStreamConfiguration()
             config.width = captureDimension(display.width)
             config.height = captureDimension(display.height)
-            config.minimumFrameInterval = CMTime(value: 1, timescale: targetFramesPerSecond)
+            config.minimumFrameInterval = CMTime(value: 1, timescale: framesPerSecond)
             config.showsCursor = false
             if #available(macOS 13.0, *) { config.capturesAudio = false }
             config.pixelFormat = kCVPixelFormatType_32BGRA
