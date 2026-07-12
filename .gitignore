@@ -1,0 +1,25 @@
+# Xcode
+*.xcuserdata
+*.xcworkspace
+xcuserdata/
+DerivedData/
+build/
+*.mode1v3
+*.mode2v3
+*.pbxuser
+!default.pbxuser
+*.perspectivev3
+!default.perspectivev3
+
+# OpenSpec
+openspec/
+.research/
+
+# macOS
+.DS_Store
+*.dmg
+
+# Build artifacts
+*.app
+*.ipa
+build/

@@ -1,0 +1,354 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0403145A63CD865F5D022415 /* HyperfocusApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF5EDA871A9C2EDA449965C7 /* HyperfocusApp.swift */; };
+		9DC71A1BF609046C70A8E1CC /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24DF3B5DCA9D0F2C054556D0 /* AppDelegate.swift */; };
+		C3F23DF14491E795724A5C1F /* OverlayWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD9636D81309A84974FE4DD3 /* OverlayWindowController.swift */; };
+		B78120AEB6594B4C58BE6719 /* DisplayManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CB7C6E49ED009B6F5A7607D /* DisplayManager.swift */; };
+		311AF90AD7B0B5BA74CB8D15 /* ActiveWindowTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9831A34138A53D9DFB5809E2 /* ActiveWindowTracker.swift */; };
+		C66F9F02057C7AF5F99009E4 /* BlurEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8C04DC46F330097367D5D06 /* BlurEngine.swift */; };
+		8750D8917B75C513B4F3119A /* MetalBlurRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4A12EA4D0E5C19D85647701 /* MetalBlurRenderer.swift */; };
+		61F8E15C35618F0E9D75D8EB /* BlurDesatShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 7F676C5E6AD037EE07358ED5 /* BlurDesatShaders.metal */; };
+		D6BA60A6184E12CAE626861A /* CachingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = D848935D2B424C2D4FA99F3C /* CachingEngine.swift */; };
+		D9F2BF04AF41691F65856209 /* StateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6A29449B38E270FF015AFC3 /* StateMachine.swift */; };
+		037056F831499133E5C9BEA3 /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02635A98689A1BF3C6AF6C25 /* MenuBarController.swift */; };
+		C361A462CEBC57E1A08B995B /* ShakeDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26180234CDF0FBEEEB515AE4 /* ShakeDetector.swift */; };
+		21714A0EC0BE4361E1654AB8 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74F7F4105E600A28CEEC965A /* SettingsView.swift */; };
+		D99F2538789397B7DE4F72B3 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9BE53FA09E6368CF762D5ED /* OnboardingView.swift */; };
+		A2B040A4FAF33319D7908DC1 /* LicenseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 172C9B6C1C93B070244509AD /* LicenseManager.swift */; };
+		EDE0FC3F7B3AC0ADC07E8630 /* Info.plist in Sources */ = {isa = PBXBuildFile; fileRef = 7F7FB66347C8C4CA2A5E2D14 /* Info.plist */; };
+		05B7D04D63E79EA48945303B /* Assets.xcassets in Sources */ = {isa = PBXBuildFile; fileRef = 8A15E9B7946C357CBA9E8DB0 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		43B7E2739D6821141F6335BB /* Project object */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = "Hyperfocus.xcodeproj"; sourceTree = "<group>"; };
+		FDBCC19CCE909A0E8FDD4080 /* Hyperfocus.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Hyperfocus.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		B324636776E136A20FF6545D /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		DA24E49C49324FBC5F323AA1 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+		DF5EDA871A9C2EDA449965C7 /* HyperfocusApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HyperfocusApp.swift"; sourceTree = "<group>"; };
+		24DF3B5DCA9D0F2C054556D0 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDelegate.swift"; sourceTree = "<group>"; };
+		DD9636D81309A84974FE4DD3 /* OverlayWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OverlayWindowController.swift"; sourceTree = "<group>"; };
+		5CB7C6E49ED009B6F5A7607D /* DisplayManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DisplayManager.swift"; sourceTree = "<group>"; };
+		9831A34138A53D9DFB5809E2 /* ActiveWindowTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ActiveWindowTracker.swift"; sourceTree = "<group>"; };
+		B8C04DC46F330097367D5D06 /* BlurEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BlurEngine.swift"; sourceTree = "<group>"; };
+		E4A12EA4D0E5C19D85647701 /* MetalBlurRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MetalBlurRenderer.swift"; sourceTree = "<group>"; };
+		7F676C5E6AD037EE07358ED5 /* BlurDesatShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = "BlurDesatShaders.metal"; sourceTree = "<group>"; };
+		D848935D2B424C2D4FA99F3C /* CachingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CachingEngine.swift"; sourceTree = "<group>"; };
+		A6A29449B38E270FF015AFC3 /* StateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StateMachine.swift"; sourceTree = "<group>"; };
+		02635A98689A1BF3C6AF6C25 /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MenuBarController.swift"; sourceTree = "<group>"; };
+		26180234CDF0FBEEEB515AE4 /* ShakeDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ShakeDetector.swift"; sourceTree = "<group>"; };
+		74F7F4105E600A28CEEC965A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView.swift"; sourceTree = "<group>"; };
+		D9BE53FA09E6368CF762D5ED /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OnboardingView.swift"; sourceTree = "<group>"; };
+		172C9B6C1C93B070244509AD /* LicenseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LicenseManager.swift"; sourceTree = "<group>"; };
+		7F7FB66347C8C4CA2A5E2D14 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
+		8A15E9B7946C357CBA9E8DB0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		8726CDAC2198FDC14CCF3033 = {
+			isa = PBXGroup;
+			children = (
+				3D4D712B005136F3CD47FF66 /* OverlayEngine */,
+				E44D3D9C7F89570C2CD4F55F /* RenderPipeline */,
+				53E5153621A06740D349414E /* AppCore */,
+				0808AE3DBBC8D6B699CDB3DD /* Resources */,
+				91606B59E9A885691A6CB79C /* Products */,
+			);
+			path = "Hyperfocus";
+			sourceTree = "<group>";
+		};
+		3D4D712B005136F3CD47FF66 /* OverlayEngine */ = {
+			isa = PBXGroup;
+			children = (
+				DD9636D81309A84974FE4DD3 /* OverlayWindowController.swift */,
+				5CB7C6E49ED009B6F5A7607D /* DisplayManager.swift */,
+				9831A34138A53D9DFB5809E2 /* ActiveWindowTracker.swift */,
+			);
+			path = OverlayEngine;
+			sourceTree = "<group>";
+		};
+		E44D3D9C7F89570C2CD4F55F /* RenderPipeline */ = {
+			isa = PBXGroup;
+			children = (
+				B8C04DC46F330097367D5D06 /* BlurEngine.swift */,
+				E4A12EA4D0E5C19D85647701 /* MetalBlurRenderer.swift */,
+				7F676C5E6AD037EE07358ED5 /* BlurDesatShaders.metal */,
+				D848935D2B424C2D4FA99F3C /* CachingEngine.swift */,
+				A6A29449B38E270FF015AFC3 /* StateMachine.swift */,
+			);
+			path = RenderPipeline;
+			sourceTree = "<group>";
+		};
+		53E5153621A06740D349414E /* AppCore */ = {
+			isa = PBXGroup;
+			children = (
+				DF5EDA871A9C2EDA449965C7 /* HyperfocusApp.swift */,
+				24DF3B5DCA9D0F2C054556D0 /* AppDelegate.swift */,
+				02635A98689A1BF3C6AF6C25 /* MenuBarController.swift */,
+				26180234CDF0FBEEEB515AE4 /* ShakeDetector.swift */,
+				74F7F4105E600A28CEEC965A /* SettingsView.swift */,
+				D9BE53FA09E6368CF762D5ED /* OnboardingView.swift */,
+				172C9B6C1C93B070244509AD /* LicenseManager.swift */,
+				B324636776E136A20FF6545D /* Debug.xcconfig */,
+				DA24E49C49324FBC5F323AA1 /* Release.xcconfig */,
+			);
+			path = AppCore;
+			sourceTree = "<group>";
+		};
+		0808AE3DBBC8D6B699CDB3DD /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				7F7FB66347C8C4CA2A5E2D14 /* Info.plist */,
+				8A15E9B7946C357CBA9E8DB0 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		91606B59E9A885691A6CB79C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				FDBCC19CCE909A0E8FDD4080 /* Hyperfocus.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		15BD41987563A12330484CB4 /* Hyperfocus */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C19D0028A171A98765E2C21A /* Build configuration list for PBXNativeTarget "Hyperfocus" */;
+			buildPhases = (
+				5172C904F97738DE1F220CAE /* Sources */,
+				BFBB1F03DB79CF47A696B4DC /* Frameworks */,
+				02EE8115EB0DCC9CB29395FC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Hyperfocus";
+			productName = "Hyperfocus";
+			productReference = FDBCC19CCE909A0E8FDD4080 /* Hyperfocus.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		43B7E2739D6821141F6335BB /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1530;
+				LastUpgradeCheck = 1530;
+				TargetAttributes = {
+					15BD41987563A12330484CB4 = {
+						CreatedOnToolsVersion = 15.3;
+					};
+				};
+			};
+			buildConfigurationList = DA8B8FDBC272A467955BD1D7 /* Build configuration list for PBXProject "Hyperfocus" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 8726CDAC2198FDC14CCF3033;
+			productRefGroup = 91606B59E9A885691A6CB79C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				15BD41987563A12330484CB4 /* Hyperfocus */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5172C904F97738DE1F220CAE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0403145A63CD865F5D022415 /* HyperfocusApp.swift in Sources */,
+				9DC71A1BF609046C70A8E1CC /* AppDelegate.swift in Sources */,
+				C3F23DF14491E795724A5C1F /* OverlayWindowController.swift in Sources */,
+				B78120AEB6594B4C58BE6719 /* DisplayManager.swift in Sources */,
+				311AF90AD7B0B5BA74CB8D15 /* ActiveWindowTracker.swift in Sources */,
+				C66F9F02057C7AF5F99009E4 /* BlurEngine.swift in Sources */,
+				8750D8917B75C513B4F3119A /* MetalBlurRenderer.swift in Sources */,
+				61F8E15C35618F0E9D75D8EB /* BlurDesatShaders.metal in Sources */,
+				D6BA60A6184E12CAE626861A /* CachingEngine.swift in Sources */,
+				D9F2BF04AF41691F65856209 /* StateMachine.swift in Sources */,
+				037056F831499133E5C9BEA3 /* MenuBarController.swift in Sources */,
+				C361A462CEBC57E1A08B995B /* ShakeDetector.swift in Sources */,
+				21714A0EC0BE4361E1654AB8 /* SettingsView.swift in Sources */,
+				D99F2538789397B7DE4F72B3 /* OnboardingView.swift in Sources */,
+				A2B040A4FAF33319D7908DC1 /* LicenseManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		BFBB1F03DB79CF47A696B4DC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXResourcesBuildPhase section */
+		02EE8115EB0DCC9CB29395FC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				05B7D04D63E79EA48945303B /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		01AA714AF1AC4CAF30492035 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = B324636776E136A20FF6545D /* Debug.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 17.4;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		57F0A2A1A7F238569FF6086B /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = DA24E49C49324FBC5F323AA1 /* Release.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_OPTIMIZATION_LEVEL = s;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.4;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		28437CC20AEEAA92B0519B94 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = B324636776E136A20FF6545D /* Debug.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Hyperfocus/Resources/Info.plist;
+				INFOPLIST_KEY_LSBackgroundOnly = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				INFOPLIST_KEY_NSPrincipalClass = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.hyperfocus.app";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		1D6C51F3C05D5E7019836365 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = DA24E49C49324FBC5F323AA1 /* Release.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Hyperfocus/Resources/Info.plist;
+				INFOPLIST_KEY_LSBackgroundOnly = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				INFOPLIST_KEY_NSPrincipalClass = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.hyperfocus.app";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		DA8B8FDBC272A467955BD1D7 /* Build configuration list for PBXProject "Hyperfocus" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				01AA714AF1AC4CAF30492035 /* Debug */,
+				57F0A2A1A7F238569FF6086B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C19D0028A171A98765E2C21A /* Build configuration list for PBXNativeTarget "Hyperfocus" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				28437CC20AEEAA92B0519B94 /* Debug */,
+				1D6C51F3C05D5E7019836365 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 43B7E2739D6821141F6335BB /* Project object */;
+}
