@@ -25,6 +25,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// letting saturated app colors turn the workspace into a blue wash.
     private let studioDimOpacity: CGFloat = 0.32
 
+    /// Height of the zone reserved for the Dock at the bottom of every
+    /// display. The auto-hidden Dock reveals the overlay underneath during
+    /// its slide-up animation. Carving out this zone lets the real desktop
+    /// show through so the Dock composites correctly.
+    private let dockZoneHeight: CGFloat = 120
+
     private var selectedMode: HyperfocusMode {
         let rawValue = UserDefaults.standard.string(forKey: Self.focusModeKey) ?? HyperfocusMode.studio.rawValue
         return HyperfocusMode(rawValue: rawValue) ?? .studio
@@ -269,6 +275,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let displayID = screen.displayID
             guard let overlay = displayManager?.overlay(for: displayID) else { continue }
             overlay.setCutout(frame)
+
+            let dockRect = CGRect(
+                x: 0, y: 0,
+                width: screen.frame.width,
+                height: dockZoneHeight
+            )
+            overlay.setDockCutout(dockRect)
 
             if currentMode == .deep, shouldAttachBlurEngine {
                 blurEngine?.attach(to: overlay, displayID: displayID)
