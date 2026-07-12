@@ -95,7 +95,7 @@ kernel void computeTileHashes(
 
 /// Fused Gaussian blur + BT.709 desaturation in a single compute pass.
 ///
-/// blurRadius: Gaussian sigma in pixels (applied at quarter-res, visually ≈ 4× at full-res)
+/// blurRadius: blur radius in capture pixels, capped at 12 for predictable cost
 /// saturation: 0.0 = full grayscale, 1.0 = original color
 kernel void blurAndDesaturate(
     texture2d<float, access::read>  src     [[texture(0)]],
@@ -109,7 +109,7 @@ kernel void blurAndDesaturate(
 
     if (gid.x >= width || gid.y >= height) return;
 
-    int radius = int(blurRadius);
+    int radius = clamp(int(blurRadius), 0, 12);
     float sigma = max(float(radius) / 2.0, 0.001);
 
     // Horizontal pass: sample along x-axis
@@ -134,53 +134,4 @@ kernel void blurAndDesaturate(
     blurred.rgb = mix(float3(luma), blurred.rgb, saturation);
 
     dst.write(blurred, gid);
-}
-
-/// Bilinearly upscales the quarter-res processed texture to full display
-/// resolution. Manual 4-tap bilinear with edge clamping (no sampler required,
-/// so it behaves uniformly as a compute kernel).
-///
-/// Reads from the quarter-res blurred/desaturated texture and writes a
-/// smoothly interpolated full-res result.
-kernel void bilinearUpscale(
-    texture2d<float, access::read>  src [[texture(0)]],
-    texture2d<float, access::write> dst [[texture(1)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    uint dstW = dst.get_width();
-    uint dstH = dst.get_height();
-    if (gid.x >= dstW || gid.y >= dstH) return;
-
-    float2 srcSize = float2(src.get_width(), src.get_height());
-    float2 dstSize = float2(dstW, dstH);
-
-    // Map destination pixel center to a source pixel-center coordinate.
-    float2 srcCoord = (float2(gid) + 0.5) * (srcSize / dstSize) - 0.5;
-
-    int x0 = int(floor(srcCoord.x));
-    int y0 = int(floor(srcCoord.y));
-    int x1 = x0 + 1;
-    int y1 = y0 + 1;
-
-    float fx = srcCoord.x - float(x0);
-    float fy = srcCoord.y - float(y0);
-
-    int maxSX = int(srcSize.x) - 1;
-    int maxSY = int(srcSize.y) - 1;
-
-    uint sx0 = uint(clamp(x0, 0, maxSX));
-    uint sx1 = uint(clamp(x1, 0, maxSX));
-    uint sy0 = uint(clamp(y0, 0, maxSY));
-    uint sy1 = uint(clamp(y1, 0, maxSY));
-
-    float4 c00 = src.read(uint2(sx0, sy0));
-    float4 c10 = src.read(uint2(sx1, sy0));
-    float4 c01 = src.read(uint2(sx0, sy1));
-    float4 c11 = src.read(uint2(sx1, sy1));
-
-    float4 top    = mix(c00, c10, fx);
-    float4 bottom = mix(c01, c11, fx);
-    float4 result = mix(top, bottom, fy);
-
-    dst.write(result, gid);
 }

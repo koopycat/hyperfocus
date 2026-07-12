@@ -5,17 +5,39 @@ import Metal
 /// Single rendering engine for Hyperfocus.
 ///
 /// Captures each display at quarter resolution via ScreenCaptureKit, runs the
-/// frames through `MetalBlurRenderer` (fused Gaussian blur + BT.709
-/// desaturation + bilinear upscale), and hands the result to the matching
-/// overlay. Each overlay's own window is excluded from capture to prevent
-/// feedback flicker.
+/// frames through `MetalBlurRenderer` (fused blur + BT.709 desaturation), and
+/// hands the low-resolution result to the matching overlay. Core Animation
+/// enlarges that result while compositing, avoiding a full-display render pass.
+/// Each overlay's own window is excluded from capture to prevent feedback flicker.
 ///
 /// Requires Screen Recording permission (prompted on first activation).
-final class BlurEngine: NSObject, SCStreamOutput {
+///
+/// All mutable state is confined to the main queue. The ScreenCaptureKit
+/// callback only forwards a pixel buffer there, while Metal work is confined
+/// to `renderQueue`.
+final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     private var streams: [CGDirectDisplayID: SCStream] = [:]
     private var renderer: MetalBlurRenderer?
     private var displayOverlays: [CGDirectDisplayID: OverlayWindowController] = [:]
-    private var displaySizes: [CGDirectDisplayID: CGSize] = [:]
+
+    /// The background is visually obscured, so ten fresh frames per second
+    /// remain smooth while substantially reducing capture and GPU work.
+    private let targetFramesPerSecond: Int32 = 10
+    private let captureScale: CGFloat = 4
+    private let maximumCaptureBlurRadius: CGFloat = 12
+    private let sampleHandlerQueue = DispatchQueue(
+        label: "com.hyperfocus.capture",
+        qos: .utility
+    )
+    private let renderQueue = DispatchQueue(
+        label: "com.hyperfocus.blur-render",
+        qos: .utility
+    )
+
+    /// Accessed only from the main queue. At most one render per display may
+    /// be in flight, so slow GPUs drop obsolete frames instead of building a
+    /// queue that increases latency and energy use.
+    private var renderingDisplays: Set<CGDirectDisplayID> = []
 
     /// Guards the permission-denied alert so it is shown at most once per session
     /// (avoids spamming across multi-display attach / reconfigure cycles).
@@ -59,7 +81,7 @@ final class BlurEngine: NSObject, SCStreamOutput {
     func detach(from displayID: CGDirectDisplayID) {
         Task { await stopCapture(for: displayID) }
         displayOverlays.removeValue(forKey: displayID)
-        displaySizes.removeValue(forKey: displayID)
+        renderingDisplays.remove(displayID)
     }
 
     func detachAll() {
@@ -68,7 +90,7 @@ final class BlurEngine: NSObject, SCStreamOutput {
             for id in ids { await stopCapture(for: id) }
         }
         displayOverlays.removeAll()
-        displaySizes.removeAll()
+        renderingDisplays.removeAll()
     }
 
     // MARK: - Screen Recording Permission
@@ -162,8 +184,8 @@ final class BlurEngine: NSObject, SCStreamOutput {
             let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
 
             let screenshotConfig = SCStreamConfiguration()
-            screenshotConfig.width = Int(display.width) / 4
-            screenshotConfig.height = Int(display.height) / 4
+            screenshotConfig.width = captureDimension(display.width)
+            screenshotConfig.height = captureDimension(display.height)
             screenshotConfig.pixelFormat = kCVPixelFormatType_32BGRA
             if #available(macOS 13.0, *) { screenshotConfig.capturesAudio = false }
 
@@ -178,10 +200,20 @@ final class BlurEngine: NSObject, SCStreamOutput {
             }
 
             if let image = cgImage {
-                if let processed = renderer?.processCGImage(image, blurRadius: blurRadius, saturation: saturation) {
-                    overlay.applyImage(processed)
-                } else {
-                    overlay.applyImage(image)
+                let overlayIdentifier = ObjectIdentifier(overlay)
+                let processed = await renderStillImage(
+                    image,
+                    renderer: renderer,
+                    blurRadius: captureSpaceBlurRadius,
+                    saturation: saturation
+                )
+                let imageToApply = processed ?? image
+                DispatchQueue.main.async { [weak self] in
+                    guard let self,
+                          let currentOverlay = self.displayOverlays[displayID],
+                          ObjectIdentifier(currentOverlay) == overlayIdentifier
+                    else { return }
+                    currentOverlay.applyImage(imageToApply)
                 }
             }
         } catch {
@@ -216,26 +248,24 @@ final class BlurEngine: NSObject, SCStreamOutput {
             let content = try await SCShareableContent.current
             guard let display = content.displays.first(where: { $0.displayID == displayID }) else { return }
 
-            displaySizes[displayID] = CGSize(width: CGFloat(display.width), height: CGFloat(display.height))
-
             let excludedWindows = content.windows.filter { $0.windowID == overlay.windowNumber }
             let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
 
             let config = SCStreamConfiguration()
-            config.width = Int(display.width) / 4   // quarter resolution
-            config.height = Int(display.height) / 4
-            config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+            config.width = captureDimension(display.width)
+            config.height = captureDimension(display.height)
+            config.minimumFrameInterval = CMTime(value: 1, timescale: targetFramesPerSecond)
             config.showsCursor = false
             if #available(macOS 13.0, *) { config.capturesAudio = false }
             config.pixelFormat = kCVPixelFormatType_32BGRA
-            config.queueDepth = 3
+            config.queueDepth = 2
 
             let stream = SCStream(filter: filter, configuration: config, delegate: nil)
-            try stream.addStreamOutput(self, type: SCStreamOutputType.screen, sampleHandlerQueue: DispatchQueue.main)
-            try await stream.startCapture()
-
+            try stream.addStreamOutput(self, type: SCStreamOutputType.screen, sampleHandlerQueue: sampleHandlerQueue)
             streams[displayID] = stream
+            try await stream.startCapture()
         } catch {
+            streams.removeValue(forKey: displayID)
             print("[Hyperfocus] Failed to start capture for display \(displayID): \(error)")
         }
     }
@@ -246,27 +276,79 @@ final class BlurEngine: NSObject, SCStreamOutput {
         streams.removeValue(forKey: displayID)
     }
 
+    // MARK: - Frame scheduling
+
+    private func captureDimension(_ dimension: Int) -> Int {
+        max(1, Int(CGFloat(dimension) / captureScale))
+    }
+
+    /// Settings are expressed in display pixels, while Metal receives a
+    /// quarter-resolution image. Scaling and capping the radius preserves the
+    /// intended visual blur without paying for an oversized convolution.
+    private var captureSpaceBlurRadius: CGFloat {
+        min(maximumCaptureBlurRadius, max(0, blurRadius / captureScale))
+    }
+
+    private func renderStillImage(
+        _ image: CGImage,
+        renderer: MetalBlurRenderer?,
+        blurRadius: CGFloat,
+        saturation: CGFloat
+    ) async -> CGImage? {
+        await withCheckedContinuation { continuation in
+            renderQueue.async {
+                continuation.resume(
+                    returning: renderer?.processCGImage(
+                        image,
+                        blurRadius: blurRadius,
+                        saturation: saturation
+                    )
+                )
+            }
+        }
+    }
+
     // MARK: - SCStreamOutput
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen,
-              let pixelBuffer = sampleBuffer.imageBuffer,
-              let displayID = streams.first(where: { $0.value === stream })?.key,
-              let overlay = displayOverlays[displayID]
+        guard type == .screen, let pixelBuffer = sampleBuffer.imageBuffer else { return }
+
+        // The stream callback runs on `sampleHandlerQueue`. Keep it cheap and
+        // move shared state access to the main queue.
+        DispatchQueue.main.async { [weak self] in
+            self?.scheduleLiveFrame(pixelBuffer, from: stream)
+        }
+    }
+
+    /// Must run on the main queue.
+    private func scheduleLiveFrame(_ pixelBuffer: CVPixelBuffer, from stream: SCStream) {
+        guard let displayID = streams.first(where: { $0.value === stream })?.key,
+              let overlay = displayOverlays[displayID],
+              !renderingDisplays.contains(displayID)
         else { return }
 
-        let outputSize = displaySizes[displayID] ?? CGSize(
-            width: CGFloat(CVPixelBufferGetWidth(pixelBuffer) * 4),
-            height: CGFloat(CVPixelBufferGetHeight(pixelBuffer) * 4)
-        )
+        renderingDisplays.insert(displayID)
+        let overlayIdentifier = ObjectIdentifier(overlay)
+        let renderRadius = captureSpaceBlurRadius
+        let renderSaturation = saturation
+        let renderer = renderer
 
-        if let cgImage = renderer?.processFrame(
-            pixelBuffer: pixelBuffer,
-            blurRadius: blurRadius,
-            saturation: saturation,
-            outputSize: outputSize
-        ) {
-            overlay.applyImage(cgImage)
+        renderQueue.async { [weak self] in
+            let image = renderer?.processFrame(
+                pixelBuffer: pixelBuffer,
+                blurRadius: renderRadius,
+                saturation: renderSaturation
+            )
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.renderingDisplays.remove(displayID)
+                guard let currentOverlay = self.displayOverlays[displayID],
+                      ObjectIdentifier(currentOverlay) == overlayIdentifier,
+                      let image
+                else { return }
+                currentOverlay.applyImage(image)
+            }
         }
     }
 }

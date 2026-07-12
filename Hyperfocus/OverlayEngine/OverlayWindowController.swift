@@ -69,6 +69,11 @@ final class OverlayWindowController {
         let content = CALayer()
         content.frame = CGRect(origin: .zero, size: frame.size)
         content.contentsGravity = .resize
+        // Deep mode deliberately hands this layer a low-resolution image.
+        // Linear filtering gives it a soft, natural enlargement without a
+        // separate full-display Metal upscale pass every frame.
+        content.magnificationFilter = .linear
+        content.minificationFilter = .linear
         content.isOpaque = false
         w.contentView?.layer?.addSublayer(content)
 

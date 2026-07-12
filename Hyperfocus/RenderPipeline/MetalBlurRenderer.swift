@@ -2,12 +2,12 @@ import Metal
 import MetalKit
 import CoreVideo
 
-/// GPU-accelerated Gaussian blur + desaturation using Metal compute
-final class MetalBlurRenderer {
+/// GPU-accelerated Gaussian blur + desaturation using Metal compute.
+/// All rendering is serialized through `BlurEngine.renderQueue`.
+final class MetalBlurRenderer: @unchecked Sendable {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let blurPipeline: MTLComputePipelineState
-    private var upscalePipeline: MTLComputePipelineState?
     private var textureCache: CVMetalTextureCache?
 
     init?() {
@@ -34,20 +34,6 @@ final class MetalBlurRenderer {
             return nil
         }
 
-        // Optional bilinear-upscale pipeline. If absent, processFrame falls back
-        // to returning the quarter-res blurred texture.
-        if let upscaleFn = library.makeFunction(name: "bilinearUpscale") {
-            do {
-                self.upscalePipeline = try device.makeComputePipelineState(function: upscaleFn)
-            } catch {
-                print("[Hyperfocus] Failed to create upscale pipeline: \(error)")
-                self.upscalePipeline = nil
-            }
-        } else {
-            print("[Hyperfocus] Metal function 'bilinearUpscale' not found; upscaling disabled")
-            self.upscalePipeline = nil
-        }
-
         var cache: CVMetalTextureCache?
         CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache)
         self.textureCache = cache
@@ -55,19 +41,15 @@ final class MetalBlurRenderer {
 
     // MARK: - Frame Processing
 
-    /// Process a captured pixel buffer through the blur+desat pipeline, then
-    /// bilinearly upscale to full display resolution.
+    /// Process a captured pixel buffer through the blur+desat pipeline.
     ///
-    /// Pipeline: quarter-res capture → blur+desat (quarter-res) → bilinear
-    /// upscale (full-res) → CGImage. `outputSize` should be the full display
-    /// resolution (e.g. 4× the captured buffer dimensions); the returned CGImage
-    /// is at that resolution, not quarter-res. Returns a CGImage suitable for
-    /// CALayer.contents.
+    /// The returned image stays at capture resolution. Core Animation expands
+    /// that image when compositing the overlay, which avoids a second full-size
+    /// compute pass and a large GPU-to-CPU readback for every frame.
     func processFrame(
         pixelBuffer: CVPixelBuffer,
         blurRadius: CGFloat,
-        saturation: CGFloat,
-        outputSize: CGSize
+        saturation: CGFloat
     ) -> CGImage? {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return nil }
 
@@ -77,7 +59,8 @@ final class MetalBlurRenderer {
         let width = sourceTexture.width
         let height = sourceTexture.height
 
-        // Quarter-res blurred output (also shader-readable for the upscale pass)
+        // Low-resolution blurred output. It is scaled by Core Animation at
+        // composition time, rather than expanded into a full-size texture here.
         let blurDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width: width,
@@ -108,69 +91,12 @@ final class MetalBlurRenderer {
         computeEncoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadGroupSize)
         computeEncoder.endEncoding()
 
-        // Pass 2: bilinear upscale to full display resolution. Falls back to the
-        // quarter-res blurred texture when the upscale pipeline is unavailable or
-        // the requested size is not larger than the source.
-        let finalTexture: MTLTexture
-        if let upscaled = upscaleTexture(
-            source: blurTexture,
-            outputSize: outputSize,
-            commandBuffer: commandBuffer
-        ) {
-            finalTexture = upscaled
-        } else {
-            finalTexture = blurTexture
-        }
-
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
 
-        // Convert the (upscaled) Metal texture to CGImage for CALayer
-        return makeCGImage(from: finalTexture)
-    }
-
-    // MARK: - Upscale
-
-    /// Bilinearly upscales `source` to `outputSize` using the `bilinearUpscale`
-    /// compute kernel. Encodes onto the given command buffer (caller commits),
-    /// so it can run in the same submission as the blur pass. Returns nil (→ the
-    /// caller falls back to the source texture) when the upscale pipeline is
-    /// unavailable or the target size is not larger than the source.
-    private func upscaleTexture(
-        source: MTLTexture,
-        outputSize: CGSize,
-        commandBuffer: MTLCommandBuffer
-    ) -> MTLTexture? {
-        guard let upscalePipeline = upscalePipeline else { return nil }
-
-        let outW = Int(outputSize.width)
-        let outH = Int(outputSize.height)
-        guard outW > source.width || outH > source.height else { return nil }
-
-        let desc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width: outW,
-            height: outH,
-            mipmapped: false
-        )
-        desc.usage = [.shaderWrite]
-        guard let output = device.makeTexture(descriptor: desc) else { return nil }
-
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return nil }
-        encoder.setComputePipelineState(upscalePipeline)
-        encoder.setTexture(source, index: 0)
-        encoder.setTexture(output, index: 1)
-
-        let threadGroupSize = MTLSize(width: 16, height: 16, depth: 1)
-        let gridSize = MTLSize(
-            width: (outW + threadGroupSize.width - 1) / threadGroupSize.width,
-            height: (outH + threadGroupSize.height - 1) / threadGroupSize.height,
-            depth: 1
-        )
-        encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadGroupSize)
-        encoder.endEncoding()
-
-        return output
+        // Convert only the low-resolution texture. The overlay's CALayer uses
+        // linear filtering when it scales this image to the display.
+        return makeCGImage(from: blurTexture)
     }
 
     // MARK: - CGImage Processing (still-screenshot boot path)
@@ -313,7 +239,7 @@ final class MetalBlurRenderer {
             bitmapInfo: bitmapInfo,
             provider: provider,
             decode: nil,
-            shouldInterpolate: false,
+            shouldInterpolate: true,
             intent: .defaultIntent
         )
     }
