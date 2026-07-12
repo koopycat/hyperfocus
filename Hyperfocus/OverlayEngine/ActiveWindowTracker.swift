@@ -31,12 +31,10 @@ final class ActiveWindowTracker {
     /// is registered in common modes so it continues to fire during drags.
     private var fallbackFrameTimer: Timer?
 
-    /// Drag detection debounce. When a frame change arrives, a short timer
-    /// waits for a second change; if one arrives within 150ms, a drag is
-    /// confirmed and the overlays are hidden until the window settles.
-    private let dragConfirmInterval: TimeInterval = 0.15
-    private let dragSettleInterval: TimeInterval = 0.30
-    private var dragConfirmTimer: Timer?
+    /// Drag detection. Every frame change while focus is active triggers
+    /// an immediate overlay hide. A 500ms settle timer resets on each
+    /// subsequent change; when it finally fires, the overlays return.
+    private let dragSettleInterval: TimeInterval = 0.50
     private var dragSettleTimer: Timer?
     private var isDragging = false
 
@@ -98,8 +96,6 @@ final class ActiveWindowTracker {
     }
 
     func stop() {
-        dragConfirmTimer?.invalidate()
-        dragConfirmTimer = nil
         dragSettleTimer?.invalidate()
         dragSettleTimer = nil
         isDragging = false
@@ -289,36 +285,12 @@ final class ActiveWindowTracker {
         frontmostWindowFrame = frame
         onWindowFrameChanged?(frame)
 
-        // Debounce: a single frame change might be a normal cutout update.
-        // Two changes within 150ms means the user is actively dragging.
-        if isDragging {
-            dragSettleTimer?.invalidate()
-            let settle = Timer(timeInterval: dragSettleInterval, repeats: false) { [weak self] _ in
-                self?.finishDrag()
-            }
-            RunLoop.main.add(settle, forMode: .common)
-            dragSettleTimer = settle
-        } else if dragConfirmTimer != nil {
-            // Second change arrived before confirm timer fired → drag confirmed.
-            dragConfirmTimer?.invalidate()
-            dragConfirmTimer = nil
-            beginDrag()
-        } else {
-            // First change: start confirm timer.
-            let confirm = Timer(timeInterval: dragConfirmInterval, repeats: false) { [weak self] _ in
-                // No second change arrived → single frame update, no drag.
-                self?.dragConfirmTimer = nil
-            }
-            RunLoop.main.add(confirm, forMode: .common)
-            dragConfirmTimer = confirm
+        // Every frame change restarts the settle timer. The first change
+        // triggers the drag-started callback to hide overlays immediately.
+        if !isDragging {
+            isDragging = true
+            onWindowDragStarted?()
         }
-    }
-
-    private func beginDrag() {
-        guard !isDragging else { return }
-        isDragging = true
-        onWindowDragStarted?()
-
         dragSettleTimer?.invalidate()
         let settle = Timer(timeInterval: dragSettleInterval, repeats: false) { [weak self] _ in
             self?.finishDrag()
@@ -331,8 +303,6 @@ final class ActiveWindowTracker {
         isDragging = false
         dragSettleTimer?.invalidate()
         dragSettleTimer = nil
-        dragConfirmTimer?.invalidate()
-        dragConfirmTimer = nil
         onWindowDragEnded?()
     }
 
