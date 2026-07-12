@@ -46,7 +46,6 @@ swiftc \
     -framework CoreGraphics \
     -framework ApplicationServices \
     -framework ServiceManagement \
-    -framework Security \
     -framework QuartzCore \
     -parse-as-library \
     -O \
