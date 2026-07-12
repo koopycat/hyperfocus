@@ -36,15 +36,31 @@ final class OverlayWindowController {
     /// clipped by the mask edge.
     private let edgePadding: CGFloat = 2
 
+    /// Small zone at the bottom of each display left uncovered so the
+    /// auto-hidden Dock slides up over the real desktop instead of the
+    /// blurred overlay. Kept small (roughly the Dock tile size plus glass
+    /// padding) so it is barely noticeable when the Dock is hidden.
+    private let dockZoneHeight: CGFloat = 40
+
     init(screen: NSScreen) {
         self.screen = screen
     }
 
     // MARK: - Window Lifecycle
 
+    /// Frame the overlay sits in, in screen coordinates. The bottom
+    /// `dockZoneHeight` points are excluded so the Dock has a clean surface
+    /// to composite against.
+    private var overlayFrame: CGRect {
+        var f = screen.frame
+        f.size.height -= dockZoneHeight
+        f.origin.y += dockZoneHeight
+        return f
+    }
+
     private func ensureWindow() {
         guard window == nil else { return }
-        let frame = screen.frame
+        let frame = overlayFrame
 
         let w = NSWindow(
             contentRect: frame,
@@ -55,7 +71,7 @@ final class OverlayWindowController {
         w.isOpaque = false
         w.hasShadow = false
         w.backgroundColor = .clear
-        w.level = NSWindow.Level(rawValue: 21)  // above Dock (20), below menu bar (24)
+        w.level = NSWindow.Level(rawValue: 19)
         w.ignoresMouseEvents = true
         w.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         w.sharingType = .none
@@ -103,14 +119,14 @@ final class OverlayWindowController {
     private func updateMask() {
         guard let mask = maskLayer else { return }
 
-        let local = CGRect(origin: .zero, size: screen.frame.size)
+        let local = CGRect(origin: .zero, size: overlayFrame.size)
         let path = CGMutablePath()
         path.addRect(local)
 
         if let cf = cutoutFrame, !cf.isNull, cf.width > 0, cf.height > 0 {
             // Convert global AppKit frame to this overlay's local space.
-            let originX = cf.minX - screen.frame.minX - edgePadding
-            let originY = cf.minY - screen.frame.minY - edgePadding
+            let originX = cf.minX - overlayFrame.minX - edgePadding
+            let originY = cf.minY - overlayFrame.minY - edgePadding
             var hole = CGRect(
                 x: originX,
                 y: originY,
