@@ -263,6 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showFocusPresentation() {
         let frame = activeWindowTracker?.currentFrontmostWindowFrame
         let studioDim = studioDimColor
+        let studioSat = UserDefaults.standard.object(forKey: "saturation") as? Double ?? 0.0
 
         let shouldAttachBlurEngine = currentMode == .deep && !hasAttachedBlurEngine
         if shouldAttachBlurEngine {
@@ -284,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             if currentMode == .studio {
-                overlay.applyDim(studioDim)
+                overlay.applyDim(studioDim, saturation: studioSat)
             }
 
             overlay.show()

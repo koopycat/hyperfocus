@@ -1,4 +1,5 @@
 import Cocoa
+import CoreImage
 import QuartzCore
 
 /// One borderless overlay window per display.
@@ -156,10 +157,22 @@ final class OverlayWindowController {
 
     /// Display the permission-free Studio effect. The mask keeps the active
     /// window live and sharp while the rest of the display is dimmed.
-    func applyDim(_ color: NSColor) {
+    ///
+    /// When `saturation` is below 1.0, a `CIColorControls` background filter
+    /// desaturates desktop content behind the semi-transparent dim layer.
+    /// This runs in the window server compositor with no permission required.
+    func applyDim(_ color: NSColor, saturation: CGFloat = 1.0) {
         ensureWindow()
         contentLayer?.contents = nil
         contentLayer?.backgroundColor = color.cgColor
+
+        if saturation < 1.0 {
+            let filter = CIFilter(name: "CIColorControls")!
+            filter.setValue(saturation, forKey: kCIInputSaturationKey)
+            contentLayer?.backgroundFilters = [filter]
+        } else {
+            contentLayer?.backgroundFilters = nil
+        }
     }
 
     /// Display a processed (blurred) image of the whole screen. The mask
