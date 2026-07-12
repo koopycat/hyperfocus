@@ -13,10 +13,6 @@ final class MouseTracker {
     /// ActiveWindowTracker when the frontmost window frame changes.
     var windowFrame: CGRect?
 
-    /// Small inward margin on the frame to prevent rapid enter/leave
-    /// flickering when the cursor is exactly on the edge.
-    private let edgeInset: CGFloat = 5
-
     private var timer: Timer?
     private var isInside = false
 
@@ -47,9 +43,7 @@ final class MouseTracker {
         let screenPoint = NSEvent.mouseLocation
         guard let frame = windowFrame else { return }
 
-        // Both are in AppKit screen coordinates (bottom-left origin).
-        let insetFrame = frame.insetBy(dx: edgeInset, dy: edgeInset)
-        let nowInside = insetFrame.contains(screenPoint)
+        let nowInside = frame.contains(screenPoint)
 
         if nowInside && !isInside {
             isInside = true
