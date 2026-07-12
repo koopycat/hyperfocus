@@ -52,6 +52,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeWindowTracker?.onFrontmostApplicationChanged = { [weak self] _ in
             self?.updatePresentationForFrontmostApplication()
         }
+        activeWindowTracker?.onWindowDragStarted = { [weak self] in
+            guard let self, self.isFocusActive else { return }
+            for overlay in self.displayManager?.allOverlays() ?? [] {
+                overlay.hide()
+            }
+        }
+        activeWindowTracker?.onWindowDragEnded = { [weak self] in
+            guard let self, self.isFocusActive else { return }
+            self.showFocusPresentation()
+        }
         activeWindowTracker?.start()
 
         // Shake-to-toggle is opt-in. The CGEvent tap needs Input Monitoring

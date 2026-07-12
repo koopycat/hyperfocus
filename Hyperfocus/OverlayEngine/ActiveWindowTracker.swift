@@ -9,6 +9,12 @@ final class ActiveWindowTracker {
     /// Invoked on the main thread after the focused-window frame changes.
     var onWindowFrameChanged: ((CGRect?) -> Void)?
 
+    /// Invoked when the user starts dragging or resizing the frontmost window.
+    var onWindowDragStarted: (() -> Void)?
+
+    /// Invoked after the window has been stationary for the settle duration.
+    var onWindowDragEnded: (() -> Void)?
+
     /// Invoked after the frontmost application and its window frame have been
     /// refreshed, even when the frame itself did not change.
     var onFrontmostApplicationChanged: ((NSRunningApplication?) -> Void)?
@@ -24,6 +30,15 @@ final class ActiveWindowTracker {
     /// permission-free fallback. It runs only while focus mode is active and
     /// is registered in common modes so it continues to fire during drags.
     private var fallbackFrameTimer: Timer?
+
+    /// Drag detection debounce. When a frame change arrives, a short timer
+    /// waits for a second change; if one arrives within 150ms, a drag is
+    /// confirmed and the overlays are hidden until the window settles.
+    private let dragConfirmInterval: TimeInterval = 0.15
+    private let dragSettleInterval: TimeInterval = 0.30
+    private var dragConfirmTimer: Timer?
+    private var dragSettleTimer: Timer?
+    private var isDragging = false
 
     private struct Observation {
         var observer: AXObserver
@@ -83,6 +98,11 @@ final class ActiveWindowTracker {
     }
 
     func stop() {
+        dragConfirmTimer?.invalidate()
+        dragConfirmTimer = nil
+        dragSettleTimer?.invalidate()
+        dragSettleTimer = nil
+        isDragging = false
         stopFrameTracking()
         hasStarted = false
         NSWorkspace.shared.notificationCenter.removeObserver(self)
@@ -268,6 +288,52 @@ final class ActiveWindowTracker {
         guard frontmostWindowFrame != frame else { return }
         frontmostWindowFrame = frame
         onWindowFrameChanged?(frame)
+
+        // Debounce: a single frame change might be a normal cutout update.
+        // Two changes within 150ms means the user is actively dragging.
+        if isDragging {
+            dragSettleTimer?.invalidate()
+            let settle = Timer(timeInterval: dragSettleInterval, repeats: false) { [weak self] _ in
+                self?.finishDrag()
+            }
+            RunLoop.main.add(settle, forMode: .common)
+            dragSettleTimer = settle
+        } else if dragConfirmTimer != nil {
+            // Second change arrived before confirm timer fired → drag confirmed.
+            dragConfirmTimer?.invalidate()
+            dragConfirmTimer = nil
+            beginDrag()
+        } else {
+            // First change: start confirm timer.
+            let confirm = Timer(timeInterval: dragConfirmInterval, repeats: false) { [weak self] _ in
+                // No second change arrived → single frame update, no drag.
+                self?.dragConfirmTimer = nil
+            }
+            RunLoop.main.add(confirm, forMode: .common)
+            dragConfirmTimer = confirm
+        }
+    }
+
+    private func beginDrag() {
+        guard !isDragging else { return }
+        isDragging = true
+        onWindowDragStarted?()
+
+        dragSettleTimer?.invalidate()
+        let settle = Timer(timeInterval: dragSettleInterval, repeats: false) { [weak self] _ in
+            self?.finishDrag()
+        }
+        RunLoop.main.add(settle, forMode: .common)
+        dragSettleTimer = settle
+    }
+
+    private func finishDrag() {
+        isDragging = false
+        dragSettleTimer?.invalidate()
+        dragSettleTimer = nil
+        dragConfirmTimer?.invalidate()
+        dragConfirmTimer = nil
+        onWindowDragEnded?()
     }
 
     // MARK: - Observers
