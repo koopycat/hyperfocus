@@ -98,9 +98,6 @@ struct SettingsView: View {
 
             GroupsTab()
                 .tabItem { Label("Groups", systemImage: "rectangle.3.group") }
-
-            LicenseTab()
-                .tabItem { Label("License", systemImage: "key") }
         }
         .frame(width: 520, height: 380)
         .onAppear(perform: loadTintColor)
@@ -520,70 +517,3 @@ struct DisplaysTab: View {
     }
 }
 
-// MARK: - License Tab
-
-struct LicenseTab: View {
-    @StateObject private var licenseManager = LicenseManager.shared
-    @AppStorage("hyperfocusMode") private var focusMode: String = HyperfocusMode.studio.rawValue
-    @State private var licenseKey: String = ""
-    @State private var message: String?
-
-    private var licenseStatus: String {
-        switch licenseManager.state {
-        case .free:
-            return "Free Tier: Studio Mode Active"
-        case .trial(let daysLeft):
-            return "Pro Trial: \(daysLeft) day\(daysLeft == 1 ? "" : "s") remaining"
-        case .pro:
-            return "Pro: Active"
-        }
-    }
-
-    var body: some View {
-        Form {
-            Text(licenseStatus)
-                .font(.headline)
-
-            TextField("License Key", text: $licenseKey)
-                .textFieldStyle(.roundedBorder)
-
-            HStack {
-                Button("Activate Pro") {
-                    if licenseManager.validateGumroadKey(licenseKey) {
-                        focusMode = HyperfocusMode.deep.rawValue
-                        message = "Pro activated on this Mac."
-                    } else {
-                        message = "That license key could not be validated."
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(licenseKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                Button("Try Pro Free for 7 Days") {
-                    if licenseManager.startTrial() {
-                        focusMode = HyperfocusMode.deep.rawValue
-                        message = "Your Pro trial is active."
-                    } else {
-                        message = "The free trial has already been used on this Mac."
-                    }
-                }
-                .buttonStyle(.bordered)
-            }
-
-            if let message {
-                Text(message)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Divider()
-
-            Text("Pro unlocks live blur. Screen Share, App Groups, and per-display blur overrides are not yet available.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Spacer()
-        }
-        .padding()
-    }
-}

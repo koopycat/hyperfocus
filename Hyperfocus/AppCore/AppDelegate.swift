@@ -8,14 +8,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeWindowTracker: ActiveWindowTracker?
     private var blurEngine: BlurEngine?
     private var shakeDetector: ShakeDetector?
-    private let licenseManager = LicenseManager.shared
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var mouseTracker: MouseTracker?
     private var isFocusActive = false
     private var isHiddenForExclusion = false
     private var hasAttachedBlurEngine = false
-    private var isSynchronizingFocusMode = false
 
     private static let hasCompletedOnboardingKey = "hasCompletedOnboarding"
     private static let focusModeKey = "hyperfocusMode"
@@ -25,8 +23,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let blurRadiusKey = "blurRadius"
     private static let saturationKey = "saturation"
 
-    /// A restrained dim keeps the background available as context without
-    /// letting saturated app colors turn the workspace into a blue wash.
     private let studioDimOpacity: CGFloat = 0.32
 
     private var selectedMode: HyperfocusMode {
@@ -35,10 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var currentMode: HyperfocusMode {
-        guard selectedMode == .deep, licenseManager.isProFeatureAvailable else {
-            return .studio
-        }
-        return .deep
+        return selectedMode
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -178,12 +171,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isHiddenForExclusion = false
         displayManager?.configureForAllScreens()
         activeWindowTracker?.startFrameTracking()
-        if selectedMode == .deep && currentMode != .deep {
-            isSynchronizingFocusMode = true
-            UserDefaults.standard.set(HyperfocusMode.studio.rawValue, forKey: Self.focusModeKey)
-            isSynchronizingFocusMode = false
-            presentDeepModeUnavailableAlert()
-        }
         activeWindowTracker?.refreshFrontmostWindow()
 
         guard !isFrontmostApplicationExcluded else {
@@ -279,18 +266,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showFocusPresentation()
     }
 
-    private func presentDeepModeUnavailableAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Deep Mode Requires Pro"
-        alert.informativeText = "Start the seven-day trial or activate Pro in Settings to use live blur. Studio mode is active instead."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Open Settings")
-        alert.addButton(withTitle: "Continue with Studio")
-        if alert.runModal() == .alertFirstButtonReturn {
-            showSettingsWindow()
-        }
-    }
-
     private func showFocusPresentation() {
         let frame = activeWindowTracker?.currentFrontmostWindowFrame
         let studioDim = studioDimColor
@@ -311,17 +286,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             if currentMode == .deep {
-                // Prevent a stale Studio strip from covering a Deep-mode
-                // presentation while settings or licensing switch modes.
                 displayManager?.stripOverlay(for: displayID)?.hide()
                 guard let overlay = displayManager?.overlay(for: displayID) else { continue }
                 overlay.setCutout(frame)
 
                 if shouldAttachBlurEngine {
-                    // Create and clear the Deep layer before ScreenCaptureKit
-                    // builds its exclusion filter. This gives the filter a
-                    // real window number and prevents a stale Studio tint
-                    // from standing in for Deep while the first frame arrives.
                     overlay.prepareForDeep()
                     overlay.show()
                     blurEngine?.attach(to: overlay, displayID: displayID)
@@ -330,8 +299,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     overlay.show()
                 }
             } else {
-                // The masked overlay gives Studio the same precise rounded
-                // cutout as Deep mode without requiring screen capture.
                 displayManager?.stripOverlay(for: displayID)?.hide()
                 guard let overlay = displayManager?.overlay(for: displayID) else { continue }
                 overlay.setCutout(frame)
@@ -341,9 +308,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if shouldAttachBlurEngine {
-            // Do not mark the engine attached when every display is disabled.
-            // A later presentation refresh can then attach normally after an
-            // enabled display becomes available.
             hasAttachedBlurEngine = attachedBlurEngine
         }
         menuBarController?.setFocusActive(true)
@@ -406,9 +370,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleOnboardingFinished(_ mode: HyperfocusMode) {
-        if mode == .deep {
-            _ = licenseManager.startTrial()
-        }
         UserDefaults.standard.set(mode.rawValue, forKey: Self.focusModeKey)
         UserDefaults.standard.set(true, forKey: Self.hasCompletedOnboardingKey)
         if let window = onboardingWindow {
@@ -452,7 +413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 UserDefaults.standard.object(forKey: Self.shakeSensitivityKey) as? Double ?? 3000
             )
         case Self.focusModeKey:
-            guard isFocusActive, !isSynchronizingFocusMode else { return }
+            guard isFocusActive else { return }
             blurEngine?.detachAll()
             hasAttachedBlurEngine = false
             deactivateFocus()

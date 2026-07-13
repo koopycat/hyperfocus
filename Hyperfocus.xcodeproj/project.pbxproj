@@ -21,7 +21,6 @@
 		D36D9640677F3B5C4500ADBC /* ShakeDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5F6E42D93A711E07CAA3AFA /* ShakeDetector.swift */; };
 		0CC795515E1BBA81D036A16F /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79350930AD852384F2390D1D /* SettingsView.swift */; };
 		5726A30BB844178BB4126333 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF474A1EB09595AF5DCC1138 /* OnboardingView.swift */; };
-		4591950BFDE77A43CC3B9024 /* LicenseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A709DD45CF1F4A5ED8DEDF /* LicenseManager.swift */; };
 		6F818A26057A1F347DB7533E /* Info.plist in Sources */ = {isa = PBXBuildFile; fileRef = 0EE4A8C007867EB12B517AAA /* Info.plist */; };
 		26051C9D5DAC1AD15C79AF3A /* Assets.xcassets in Sources */ = {isa = PBXBuildFile; fileRef = 97A1F58CEB0BE2298B2C69F2 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -45,7 +44,6 @@
 		C5F6E42D93A711E07CAA3AFA /* ShakeDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ShakeDetector.swift"; sourceTree = "<group>"; };
 		79350930AD852384F2390D1D /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView.swift"; sourceTree = "<group>"; };
 		AF474A1EB09595AF5DCC1138 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OnboardingView.swift"; sourceTree = "<group>"; };
-		F4A709DD45CF1F4A5ED8DEDF /* LicenseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LicenseManager.swift"; sourceTree = "<group>"; };
 		0EE4A8C007867EB12B517AAA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
 		97A1F58CEB0BE2298B2C69F2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -94,7 +92,6 @@
 				C5F6E42D93A711E07CAA3AFA /* ShakeDetector.swift */,
 				79350930AD852384F2390D1D /* SettingsView.swift */,
 				AF474A1EB09595AF5DCC1138 /* OnboardingView.swift */,
-				F4A709DD45CF1F4A5ED8DEDF /* LicenseManager.swift */,
 				330F914EC3FB1CF13E9C8E1E /* Debug.xcconfig */,
 				6D05CBD4955F82916FAFC469 /* Release.xcconfig */,
 			);
@@ -190,7 +187,6 @@
 				D36D9640677F3B5C4500ADBC /* ShakeDetector.swift in Sources */,
 				0CC795515E1BBA81D036A16F /* SettingsView.swift in Sources */,
 				5726A30BB844178BB4126333 /* OnboardingView.swift in Sources */,
-				4591950BFDE77A43CC3B9024 /* LicenseManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

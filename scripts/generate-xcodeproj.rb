@@ -54,7 +54,6 @@ files = {
   'ShakeDetector.swift'           => [app_core_group, sources_phase_ref],
   'SettingsView.swift'            => [app_core_group, sources_phase_ref],
   'OnboardingView.swift'          => [app_core_group, sources_phase_ref],
-  'LicenseManager.swift'          => [app_core_group, sources_phase_ref],
   'Info.plist'                    => [resources_group, resources_phase_ref],
   'Assets.xcassets'               => [resources_group, resources_phase_ref],
 }
@@ -133,7 +132,6 @@ IO.write(PROJECT_FILE, <<~PBXPROJ)
 			children = (
 				#{file_refs['BlurEngine.swift']} /* BlurEngine.swift */,
 				#{file_refs['MetalBlurRenderer.swift']} /* MetalBlurRenderer.swift */,
-				#{file_refs['BlurDesatShaders.metal']} /* BlurDesatShaders.metal */,
 			);
 			path = RenderPipeline;
 			sourceTree = "<group>";
@@ -147,7 +145,6 @@ IO.write(PROJECT_FILE, <<~PBXPROJ)
 				#{file_refs['ShakeDetector.swift']} /* ShakeDetector.swift */,
 				#{file_refs['SettingsView.swift']} /* SettingsView.swift */,
 				#{file_refs['OnboardingView.swift']} /* OnboardingView.swift */,
-				#{file_refs['LicenseManager.swift']} /* LicenseManager.swift */,
 				#{debug_xcconfig_ref} /* Debug.xcconfig */,
 				#{release_xcconfig_ref} /* Release.xcconfig */,
 			);

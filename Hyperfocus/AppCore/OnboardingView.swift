@@ -3,9 +3,7 @@ import SwiftUI
 
 // MARK: - Hyperfocus Mode
 
-/// The two focus modes a user can choose during onboarding.
-/// `studio` is the free tier (dim + desaturate, no permissions).
-/// `deep` is the Pro tier (full blur, requires Screen Recording permission).
+/// The two focus modes available. Both are always free — no paywall.
 enum HyperfocusMode: String, CaseIterable, Identifiable, Codable {
     case studio
     case deep
@@ -19,13 +17,6 @@ enum HyperfocusMode: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    var badgeText: String {
-        switch self {
-        case .studio: return "FREE"
-        case .deep: return "PRO TRIAL"
-        }
-    }
-
     var headline: String {
         switch self {
         case .studio: return "Dim Background"
@@ -36,7 +27,7 @@ enum HyperfocusMode: String, CaseIterable, Identifiable, Codable {
     var detail: String {
         switch self {
         case .studio: return "Zero permissions needed"
-        case .deep: return "7-day free trial, then $4.99"
+        case .deep: return "Requires Screen Recording permission"
         }
     }
 
@@ -51,15 +42,11 @@ enum HyperfocusMode: String, CaseIterable, Identifiable, Codable {
 // MARK: - Onboarding View
 
 /// First-launch onboarding for Hyperfocus. Lets the user pick a focus mode
-/// (Studio or Deep) and see what is included. On completion, the chosen
-/// mode is reported back via the `onFinished` closure so the caller can
-/// persist it and dismiss the window.
+/// (Studio or Deep). All features are free — no trial or license needed.
 struct OnboardingView: View {
     @State private var selectedMode: HyperfocusMode = .studio
     @State private var hasFinished: Bool = false
 
-    /// Called exactly once, either when the user presses "Get Started"
-    /// or when the hosting window is dismissed by other means.
     let onFinished: (HyperfocusMode) -> Void
 
     var body: some View {
@@ -72,7 +59,7 @@ struct OnboardingView: View {
             Divider()
             footer
         }
-        .frame(width: 560, height: 600)
+        .frame(width: 560, height: 580)
         .background(Color(NSColor.windowBackgroundColor))
         .onDisappear(perform: finish)
     }
@@ -145,9 +132,6 @@ struct OnboardingView: View {
                     .foregroundStyle(.tint)
                 Text("Studio Mode")
                     .font(.headline)
-                Text("· Free forever")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
             }
 
             featureRow(icon: "moon.fill",
@@ -170,9 +154,6 @@ struct OnboardingView: View {
                     .foregroundStyle(.tint)
                 Text("Deep Mode")
                     .font(.headline)
-                Text("· 7-day free trial, then $4.99")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
             }
 
             featureRow(icon: "drop.fill",
@@ -231,7 +212,6 @@ struct OnboardingView: View {
 
 // MARK: - Mode Card
 
-/// Selectable card representing one focus mode in the onboarding chooser.
 struct ModeCard: View {
     let mode: HyperfocusMode
     let isSelected: Bool
@@ -254,12 +234,6 @@ struct ModeCard: View {
                     .font(.title3)
                     .fontWeight(.semibold)
 
-                Text(mode.badgeText)
-                    .font(.caption2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.secondary)
-                    .tracking(0.5)
-
                 Text(mode.headline)
                     .font(.headline)
 
@@ -269,7 +243,7 @@ struct ModeCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(16)
-            .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color(NSColor.controlBackgroundColor))
