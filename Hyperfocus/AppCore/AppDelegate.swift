@@ -8,7 +8,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeWindowTracker: ActiveWindowTracker?
     private var blurEngine: BlurEngine?
     private var mouseTracker: MouseTracker?
-    private var shakeDetector: ShakeDetector?
     private let licenseManager = LicenseManager.shared
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
@@ -19,8 +18,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private static let hasCompletedOnboardingKey = "hasCompletedOnboarding"
     private static let focusModeKey = "hyperfocusMode"
-    private static let shakeEnabledKey = "shakeEnabled"
-    private static let shakeSensitivityKey = "shakeSensitivity"
 
     /// A restrained dim keeps the background available as context without
     /// letting saturated app colors turn the workspace into a blue wash.
@@ -80,21 +77,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         activeWindowTracker?.start()
 
-        // Shake-to-toggle is opt-in. The CGEvent tap needs Input Monitoring
-        // permission and would prompt on every fresh ad-hoc build, so we never
-        // start it automatically. The user enables it from Settings, where the
-        // prompt is expected and actionable.
-        shakeDetector = ShakeDetector()
-        shakeDetector?.sensitivity = CGFloat(
-            UserDefaults.standard.object(forKey: Self.shakeSensitivityKey) as? Double ?? 3000
-        )
-        shakeDetector?.onShakeDetected = { [weak self] in
-            self?.menuBarController?.requestToggle()
-        }
-        if UserDefaults.standard.bool(forKey: Self.shakeEnabledKey) {
-            shakeDetector?.start()
-        }
-
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleFocusToggle(_:)),
             name: .hyperfocusToggle, object: nil
@@ -116,12 +98,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, forKeyPath: "launchAtLogin", options: .new, context: nil
         )
         UserDefaults.standard.addObserver(
-            self, forKeyPath: Self.shakeEnabledKey, options: .new, context: nil
-        )
-        UserDefaults.standard.addObserver(
-            self, forKeyPath: Self.shakeSensitivityKey, options: .new, context: nil
-        )
-        UserDefaults.standard.addObserver(
             self, forKeyPath: Self.focusModeKey, options: .new, context: nil
         )
         UserDefaults.standard.addObserver(
@@ -138,13 +114,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         displayManager?.removeAllOverlays()
         activeWindowTracker?.stop()
         mouseTracker?.stop()
-        shakeDetector?.stop()
         blurEngine?.detachAll()
 
         NotificationCenter.default.removeObserver(self)
         UserDefaults.standard.removeObserver(self, forKeyPath: "launchAtLogin")
-        UserDefaults.standard.removeObserver(self, forKeyPath: Self.shakeEnabledKey)
-        UserDefaults.standard.removeObserver(self, forKeyPath: Self.shakeSensitivityKey)
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.focusModeKey)
         UserDefaults.standard.removeObserver(self, forKeyPath: "blurFPS")
     }
@@ -326,17 +299,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarController?.setFocusActive(true)
     }
 
-    /// Called from Settings when the user toggles shake-to-toggle.
-    /// Starting the CGEvent tap triggers the Input Monitoring permission
-    // prompt, which is expected here because the user just opted in.
-    func setShakeDetection(enabled: Bool) {
-        if enabled {
-            shakeDetector?.start()
-        } else {
-            shakeDetector?.stop()
-        }
-    }
-
     // MARK: - Settings and onboarding
 
     @objc private func handleOpenSettingsNotification(_ notification: Notification) {
@@ -422,12 +384,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch keyPath {
         case "launchAtLogin":
             updateLaunchAtLogin()
-        case Self.shakeEnabledKey:
-            setShakeDetection(enabled: UserDefaults.standard.bool(forKey: Self.shakeEnabledKey))
-        case Self.shakeSensitivityKey:
-            shakeDetector?.sensitivity = CGFloat(
-                UserDefaults.standard.object(forKey: Self.shakeSensitivityKey) as? Double ?? 3000
-            )
         case Self.focusModeKey:
             guard isFocusActive, !isSynchronizingFocusMode else { return }
             deactivateFocus()

@@ -26,7 +26,5 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>NSInputMonitoringUsageDescription</key>
-	<string>Hyperfocus monitors mouse movement only when you enable Shake-to-Toggle.</string>
 </dict>
 </plist>

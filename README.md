@@ -32,7 +32,7 @@ Requires **macOS 12.3** (Monterey) or newer.
    - Studio dim color, blur radius, and saturation
    - Enable or disable the effect per display
    - An app exclusion list for apps that should suspend the effect when frontmost
-4. Toggle from the menu bar or enable shake-to-toggle in Settings.
+4. Toggle from the menu bar.
 
 That's it. **Zero permissions** required to start.
 
@@ -48,7 +48,7 @@ Studio works without Screen Recording permission:
 - Rounded cutout keeps the active window clear and live
 - Enable or disable the effect per display
 - App exclusion list for frontmost apps
-- Menu-bar toggle, optional shake-to-toggle, and launch at login
+- Menu-bar toggle and launch at login
 
 ### Pro - Deep mode
 

@@ -20,8 +20,6 @@ struct HyperfocusSettings: Codable {
     var blurRadius: Double
     var saturation: Double
     var tintColorData: Data?
-    var shakeEnabled: Bool?
-    var shakeSensitivity: Double
     var launchAtLogin: Bool
     var focusMode: String?
     var blurFPS: Int
@@ -37,8 +35,6 @@ extension HyperfocusSettings {
             blurRadius: defaults.object(forKey: "blurRadius") as? Double ?? 20,
             saturation: defaults.object(forKey: "saturation") as? Double ?? 0,
             tintColorData: defaults.data(forKey: "tintColorData"),
-            shakeEnabled: defaults.bool(forKey: "shakeEnabled"),
-            shakeSensitivity: defaults.object(forKey: "shakeSensitivity") as? Double ?? 3000,
             launchAtLogin: defaults.bool(forKey: "launchAtLogin"),
             focusMode: defaults.string(forKey: "hyperfocusMode"),
             blurFPS: defaults.integer(forKey: "blurFPS"),
@@ -53,8 +49,6 @@ extension HyperfocusSettings {
         defaults.set(blurRadius, forKey: "blurRadius")
         defaults.set(saturation, forKey: "saturation")
         defaults.set(tintColorData, forKey: "tintColorData")
-        if let shakeEnabled { defaults.set(shakeEnabled, forKey: "shakeEnabled") }
-        defaults.set(shakeSensitivity, forKey: "shakeSensitivity")
         defaults.set(launchAtLogin, forKey: "launchAtLogin")
         defaults.set(focusMode, forKey: "hyperfocusMode")
         defaults.set(blurFPS, forKey: "blurFPS")
@@ -70,7 +64,6 @@ struct SettingsView: View {
     @AppStorage("blurRadius") private var blurRadius: Double = 20
     @AppStorage("saturation") private var saturation: Double = 0.0
     @AppStorage("tintColorData") private var tintColorData: Data?
-    @AppStorage("shakeSensitivity") private var shakeSensitivity: Double = 3000
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
     @AppStorage("excludedApps") private var excludedAppsData: Data?
     @AppStorage("appGroups") private var appGroupsData: Data?
@@ -126,8 +119,6 @@ struct SettingsView: View {
 struct GeneralTab: View {
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
     @AppStorage("hyperfocusMode") private var focusMode: String = HyperfocusMode.studio.rawValue
-    @AppStorage("shakeEnabled") private var shakeEnabled: Bool = false
-    @AppStorage("shakeSensitivity") private var shakeSensitivity: Double = 3000
 
     var body: some View {
         Form {
@@ -138,17 +129,6 @@ struct GeneralTab: View {
             }
 
             Toggle("Launch at Login", isOn: $launchAtLogin)
-            Toggle("Enable Shake-to-Toggle", isOn: $shakeEnabled)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Shake Sensitivity: \(Int(shakeSensitivity))")
-                    .font(.body)
-                Slider(value: $shakeSensitivity, in: 1000...10000, step: 500)
-                Text("Higher = harder shake needed to toggle")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .disabled(!shakeEnabled)
 
             HStack {
                 Button("Export Settings...") { exportSettings() }
