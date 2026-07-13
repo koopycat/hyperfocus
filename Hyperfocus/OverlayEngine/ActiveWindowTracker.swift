@@ -96,13 +96,16 @@ final class ActiveWindowTracker {
     }
 
     func stop() {
+        // Remove all AX observations synchronously before clearing any
+        // other state. This prevents a callback from arriving with a
+        // dangling Unmanaged raw pointer after the tracker is gone.
+        removeAllObservations()
         dragSettleTimer?.invalidate()
         dragSettleTimer = nil
         isDragging = false
         stopFrameTracking()
         hasStarted = false
         NSWorkspace.shared.notificationCenter.removeObserver(self)
-        removeAllObservations()
     }
 
     // MARK: - Active frame tracking

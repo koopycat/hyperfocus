@@ -20,6 +20,11 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     private var renderer: MetalBlurRenderer?
     private var displayOverlays: [CGDirectDisplayID: OverlayWindowController] = [:]
 
+    /// Invalidates pending permission, still-frame, and stream-start tasks
+    /// when a focus session ends. Without this, an async teardown can stop a
+    /// freshly-created replacement stream for the same display.
+    private var captureGeneration: UInt = 0
+
     /// Frame rate for ScreenCaptureKit streams. User-configurable in
     /// Settings → Effects; defaults to 10 for a good energy/smoothness
     /// balance on most Macs.
@@ -68,13 +73,26 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     func attach(to overlay: OverlayWindowController, displayID: CGDirectDisplayID) {
         NSLog("[Hyperfocus] attach display \(displayID)")
         displayOverlays[displayID] = overlay
-        Task {
-            guard await requestPermissionIfNeeded() else { return }
+        let generation = captureGeneration
+        Task { [weak self] in
+            guard let self,
+                  await self.requestPermissionIfNeeded(),
+                  self.captureGeneration == generation
+            else { return }
 
             // Show a blurred still screenshot immediately so activation
             // feels instant; the live stream blends over the top.
-            await captureStillScreenshot(for: displayID, overlay: overlay)
-            await startCapture(for: displayID, overlay: overlay)
+            await self.captureStillScreenshot(
+                for: displayID,
+                overlay: overlay,
+                generation: generation
+            )
+            guard self.captureGeneration == generation else { return }
+            await self.startCapture(
+                for: displayID,
+                overlay: overlay,
+                generation: generation
+            )
         }
     }
 
@@ -84,18 +102,25 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 
     func detach(from displayID: CGDirectDisplayID) {
-        Task { await stopCapture(for: displayID) }
+        let stream = streams.removeValue(forKey: displayID)
         displayOverlays.removeValue(forKey: displayID)
         renderingDisplays.remove(displayID)
+        if let stream {
+            Task { try? await stream.stopCapture() }
+        }
     }
 
     func detachAll() {
-        let ids = Array(streams.keys)
-        Task {
-            for id in ids { await stopCapture(for: id) }
-        }
+        captureGeneration &+= 1
+        let streamsToStop = Array(streams.values)
+        streams.removeAll()
         displayOverlays.removeAll()
         renderingDisplays.removeAll()
+        Task {
+            for stream in streamsToStop {
+                try? await stream.stopCapture()
+            }
+        }
     }
 
     // MARK: - Screen Recording Permission
@@ -179,9 +204,14 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     /// Capture a single still image of the display, blur it, and push it to
     /// the overlay before the live stream delivers its first frame.
-    private func captureStillScreenshot(for displayID: CGDirectDisplayID, overlay: OverlayWindowController) async {
+    private func captureStillScreenshot(
+        for displayID: CGDirectDisplayID,
+        overlay: OverlayWindowController,
+        generation: UInt
+    ) async {
         do {
             let content = try await SCShareableContent.current
+            guard captureGeneration == generation else { return }
             guard let display = content.displays.first(where: { $0.displayID == displayID }) else { return }
 
             // Exclude the overlay window from its own capture.
@@ -205,6 +235,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             }
 
             if let image = cgImage {
+                guard captureGeneration == generation else { return }
                 let overlayIdentifier = ObjectIdentifier(overlay)
                 let processed = await renderStillImage(
                     image,
@@ -215,6 +246,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
                 let imageToApply = processed ?? image
                 DispatchQueue.main.async { [weak self] in
                     guard let self,
+                          self.captureGeneration == generation,
                           let currentOverlay = self.displayOverlays[displayID],
                           ObjectIdentifier(currentOverlay) == overlayIdentifier
                     else { return }
@@ -248,9 +280,15 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     // MARK: - Capture Management
 
-    private func startCapture(for displayID: CGDirectDisplayID, overlay: OverlayWindowController) async {
+    private func startCapture(
+        for displayID: CGDirectDisplayID,
+        overlay: OverlayWindowController,
+        generation: UInt
+    ) async {
+        var streamToStart: SCStream?
         do {
             let content = try await SCShareableContent.current
+            guard captureGeneration == generation else { return }
             guard let display = content.displays.first(where: { $0.displayID == displayID }) else { return }
 
             let excludedWindows = content.windows.filter { $0.windowID == overlay.windowNumber }
@@ -266,19 +304,24 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             config.queueDepth = 2
 
             let stream = SCStream(filter: filter, configuration: config, delegate: nil)
+            streamToStart = stream
             try stream.addStreamOutput(self, type: SCStreamOutputType.screen, sampleHandlerQueue: sampleHandlerQueue)
+            guard captureGeneration == generation else { return }
             streams[displayID] = stream
             try await stream.startCapture()
+            guard captureGeneration == generation else {
+                if streams[displayID] === stream {
+                    streams.removeValue(forKey: displayID)
+                }
+                try? await stream.stopCapture()
+                return
+            }
         } catch {
-            streams.removeValue(forKey: displayID)
+            if let streamToStart, streams[displayID] === streamToStart {
+                streams.removeValue(forKey: displayID)
+            }
             print("[Hyperfocus] Failed to start capture for display \(displayID): \(error)")
         }
-    }
-
-    private func stopCapture(for displayID: CGDirectDisplayID) async {
-        guard let stream = streams[displayID] else { return }
-        try? await stream.stopCapture()
-        streams.removeValue(forKey: displayID)
     }
 
     // MARK: - Frame scheduling
@@ -333,6 +376,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         else { return }
 
         renderingDisplays.insert(displayID)
+        let generation = captureGeneration
         let overlayIdentifier = ObjectIdentifier(overlay)
         let renderRadius = captureSpaceBlurRadius
         let renderSaturation = saturation
@@ -347,6 +391,10 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
             DispatchQueue.main.async {
                 guard let self else { return }
+                // `detachAll()` clears this set and advances the generation.
+                // Do not let a queued frame from the old session clear the
+                // new session's in-flight marker or paint over its first frame.
+                guard self.captureGeneration == generation else { return }
                 self.renderingDisplays.remove(displayID)
                 guard let currentOverlay = self.displayOverlays[displayID],
                       ObjectIdentifier(currentOverlay) == overlayIdentifier,

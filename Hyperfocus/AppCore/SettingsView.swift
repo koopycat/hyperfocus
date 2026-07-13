@@ -96,6 +96,9 @@ struct SettingsView: View {
             DisplaysTab()
                 .tabItem { Label("Displays", systemImage: "display") }
 
+            GroupsTab()
+                .tabItem { Label("Groups", systemImage: "rectangle.3.group") }
+
             LicenseTab()
                 .tabItem { Label("License", systemImage: "key") }
         }
@@ -204,7 +207,7 @@ struct EffectsTab: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Blur Radius: \(Int(blurRadius))")
                     .font(.body)
-                Slider(value: $blurRadius, in: 0...60, step: 1)
+                Slider(value: $blurRadius, in: 0...48, step: 1)
                 Text("Higher = softer background")
                     .font(.caption)
                     .foregroundColor(.secondary)

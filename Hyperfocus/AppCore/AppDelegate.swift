@@ -7,7 +7,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var displayManager: DisplayManager?
     private var activeWindowTracker: ActiveWindowTracker?
     private var blurEngine: BlurEngine?
-    private var mouseTracker: MouseTracker?
     private var shakeDetector: ShakeDetector?
     private let licenseManager = LicenseManager.shared
     private var onboardingWindow: NSWindow?
@@ -21,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let focusModeKey = "hyperfocusMode"
     private static let shakeEnabledKey = "shakeEnabled"
     private static let shakeSensitivityKey = "shakeSensitivity"
+    private static let perDisplaySettingsKey = "perDisplaySettings"
+    private static let blurRadiusKey = "blurRadius"
+    private static let saturationKey = "saturation"
 
     /// A restrained dim keeps the background available as context without
     /// letting saturated app colors turn the workspace into a blue wash.
@@ -42,40 +44,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         menuBarController = MenuBarController()
         activeWindowTracker = ActiveWindowTracker()
-        mouseTracker = MouseTracker()
         displayManager = DisplayManager()
         blurEngine = BlurEngine()
 
         // Window frame changes update the cutout hole on every overlay.
         activeWindowTracker?.onWindowFrameChanged = { [weak self] frame in
-            guard let self, self.isFocusActive, !self.isHiddenForExclusion else { return }
+            guard let self, self.isFocusActive, !self.isHiddenForExclusion,
+                  !self.isFrontmostApplicationExcluded else { return }
             self.applyCutout(frame)
-            self.mouseTracker?.windowFrame = frame
         }
         activeWindowTracker?.onFrontmostApplicationChanged = { [weak self] _ in
             self?.updatePresentationForFrontmostApplication()
         }
         activeWindowTracker?.onWindowDragStarted = { [weak self] in
             guard let self, self.isFocusActive else { return }
-            for overlay in self.displayManager?.allOverlays() ?? [] {
-                overlay.hide()
-            }
+            for overlay in self.displayManager?.allOverlays() ?? [] { overlay.hide() }
+            for strip in self.displayManager?.allStripOverlays() ?? [] { strip.hide() }
         }
         activeWindowTracker?.onWindowDragEnded = { [weak self] in
             guard let self, self.isFocusActive else { return }
-            self.mouseTracker?.windowFrame = self.activeWindowTracker?.currentFrontmostWindowFrame
-            guard self.mouseTracker?.isMouseInsideWindow != false else { return }
-            self.showFocusPresentation()
-        }
-
-        mouseTracker?.onMouseExitedWindow = { [weak self] in
-            guard let self, self.isFocusActive else { return }
-            for overlay in self.displayManager?.allOverlays() ?? [] {
-                overlay.hide()
-            }
-        }
-        mouseTracker?.onMouseEnteredWindow = { [weak self] in
-            guard let self, self.isFocusActive else { return }
+            // A focus change can happen through the keyboard or while the
+            // pointer is outside the window. Presentation follows focus, not
+            // pointer location, so always restore the overlay after settling.
             self.showFocusPresentation()
         }
         activeWindowTracker?.start()
@@ -103,10 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, selector: #selector(screenParametersChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil
         )
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(userDefaultsDidChange(_:)),
-            name: UserDefaults.didChangeNotification, object: nil
-        )
+
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleOpenSettingsNotification(_:)),
             name: .hyperfocusOpenSettings, object: nil
@@ -127,6 +114,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.addObserver(
             self, forKeyPath: "blurFPS", options: .new, context: nil
         )
+        UserDefaults.standard.addObserver(
+            self, forKeyPath: Self.perDisplaySettingsKey, options: .new, context: nil
+        )
+        UserDefaults.standard.addObserver(
+            self, forKeyPath: Self.blurRadiusKey, options: .new, context: nil
+        )
+        UserDefaults.standard.addObserver(
+            self, forKeyPath: Self.saturationKey, options: .new, context: nil
+        )
         updateLaunchAtLogin()
 
         if !UserDefaults.standard.bool(forKey: Self.hasCompletedOnboardingKey) {
@@ -137,7 +133,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         displayManager?.removeAllOverlays()
         activeWindowTracker?.stop()
-        mouseTracker?.stop()
         shakeDetector?.stop()
         blurEngine?.detachAll()
 
@@ -147,12 +142,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.shakeSensitivityKey)
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.focusModeKey)
         UserDefaults.standard.removeObserver(self, forKeyPath: "blurFPS")
+        UserDefaults.standard.removeObserver(self, forKeyPath: Self.perDisplaySettingsKey)
+        UserDefaults.standard.removeObserver(self, forKeyPath: Self.blurRadiusKey)
+        UserDefaults.standard.removeObserver(self, forKeyPath: Self.saturationKey)
     }
 
     // MARK: - Focus Toggle
 
     @objc private func handleFocusToggle(_ notification: Notification) {
         guard let active = notification.userInfo?["active"] as? Bool else { return }
+        // Block focus toggle until onboarding is complete
+        guard UserDefaults.standard.bool(forKey: Self.hasCompletedOnboardingKey) else {
+            menuBarController?.setFocusActive(false)
+            return
+        }
         if active { activateFocus() } else { deactivateFocus() }
     }
 
@@ -161,7 +164,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isHiddenForExclusion = false
         displayManager?.configureForAllScreens()
         activeWindowTracker?.startFrameTracking()
-        mouseTracker?.start()
         if selectedMode == .deep && currentMode != .deep {
             isSynchronizingFocusMode = true
             UserDefaults.standard.set(HyperfocusMode.studio.rawValue, forKey: Self.focusModeKey)
@@ -184,18 +186,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isHiddenForExclusion = false
         hasAttachedBlurEngine = false
         activeWindowTracker?.stopFrameTracking()
-        mouseTracker?.stop()
         blurEngine?.detachAll()
-        for overlay in displayManager?.allOverlays() ?? [] {
-            overlay.hide()
-        }
+        for overlay in displayManager?.allOverlays() ?? [] { overlay.hide() }
+        for strip in displayManager?.allStripOverlays() ?? [] { strip.hide() }
         menuBarController?.setFocusActive(false)
     }
 
     private func applyCutout(_ frame: CGRect?) {
-        for overlay in displayManager?.allOverlays() ?? [] {
-            overlay.setCutout(frame)
-        }
+        for overlay in displayManager?.allOverlays() ?? [] { overlay.setCutout(frame) }
+        for strip in displayManager?.allStripOverlays() ?? [] { strip.setCutout(frame) }
     }
 
     @objc private func screenParametersChanged() {
@@ -213,18 +212,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Settings
-
-    @objc private func userDefaultsDidChange(_ notification: Notification) {
-        guard isFocusActive else { return }
-        if isFrontmostApplicationExcluded || isHiddenForExclusion {
-            updatePresentationForFrontmostApplication()
-            return
-        }
-        if currentMode == .deep {
-            pushSettingsToEngine()
-        }
-        showFocusPresentation()
-    }
 
     private func pushSettingsToEngine() {
         guard currentMode == .deep else { return }
@@ -266,14 +253,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if isFrontmostApplicationExcluded {
             guard !isHiddenForExclusion else { return }
             isHiddenForExclusion = true
-            for overlay in displayManager?.allOverlays() ?? [] {
-                overlay.hide()
-            }
+            for overlay in displayManager?.allOverlays() ?? [] { overlay.hide() }
+            for strip in displayManager?.allStripOverlays() ?? [] { strip.hide() }
             return
         }
 
-        guard isHiddenForExclusion else { return }
         isHiddenForExclusion = false
+        // `setFrontmostWindowFrame` only emits when the rect changes. Two
+        // focused windows can share the same frame, so app activation itself
+        // must also restore the presentation.
         showFocusPresentation()
     }
 
@@ -292,36 +280,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showFocusPresentation() {
         let frame = activeWindowTracker?.currentFrontmostWindowFrame
         let studioDim = studioDimColor
-        let studioSat = UserDefaults.standard.object(forKey: "saturation") as? Double ?? 0.0
+        let studioSaturation = UserDefaults.standard.object(forKey: "saturation") as? Double ?? 0.0
 
         let shouldAttachBlurEngine = currentMode == .deep && !hasAttachedBlurEngine
+        var attachedBlurEngine = false
         if shouldAttachBlurEngine {
             pushSettingsToEngine()
         }
 
         for screen in NSScreen.screens {
             let displayID = screen.displayID
-            guard let overlay = displayManager?.overlay(for: displayID) else { continue }
-            overlay.setCutout(frame)
-
-            if currentMode == .deep, shouldAttachBlurEngine {
-                blurEngine?.attach(to: overlay, displayID: displayID)
-            }
-
             guard isDisplayEffectEnabled(displayID) else {
-                overlay.hide()
+                displayManager?.overlay(for: displayID)?.hide()
+                displayManager?.stripOverlay(for: displayID)?.hide()
                 continue
             }
 
-            if currentMode == .studio {
-                overlay.applyDim(studioDim, saturation: studioSat)
-            }
+            if currentMode == .deep {
+                // Prevent a stale Studio strip from covering a Deep-mode
+                // presentation while settings or licensing switch modes.
+                displayManager?.stripOverlay(for: displayID)?.hide()
+                guard let overlay = displayManager?.overlay(for: displayID) else { continue }
+                overlay.setCutout(frame)
 
-            overlay.show()
+                if shouldAttachBlurEngine {
+                    // Create and clear the Deep layer before ScreenCaptureKit
+                    // builds its exclusion filter. This gives the filter a
+                    // real window number and prevents a stale Studio tint
+                    // from standing in for Deep while the first frame arrives.
+                    overlay.prepareForDeep()
+                    overlay.show()
+                    blurEngine?.attach(to: overlay, displayID: displayID)
+                    attachedBlurEngine = blurEngine != nil
+                } else {
+                    overlay.show()
+                }
+            } else {
+                // The masked overlay gives Studio the same precise rounded
+                // cutout as Deep mode without requiring screen capture.
+                displayManager?.stripOverlay(for: displayID)?.hide()
+                guard let overlay = displayManager?.overlay(for: displayID) else { continue }
+                overlay.setCutout(frame)
+                overlay.applyDim(studioDim, saturation: CGFloat(studioSaturation))
+                overlay.show()
+            }
         }
 
         if shouldAttachBlurEngine {
-            hasAttachedBlurEngine = true
+            // Do not mark the engine attached when every display is disabled.
+            // A later presentation refresh can then attach normally after an
+            // enabled display becomes available.
+            hasAttachedBlurEngine = attachedBlurEngine
         }
         menuBarController?.setFocusActive(true)
     }
@@ -434,8 +443,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activateFocus()
         case "blurFPS":
             guard isFocusActive, currentMode == .deep else { return }
+            // SCStream has no public configuration property for in-place
+            // frame-interval updates. Teardown + rebuild is the safe path.
             deactivateFocus()
             activateFocus()
+        case Self.perDisplaySettingsKey:
+            guard isFocusActive else { return }
+            // Stream filters are display-specific. Rebuild the active session
+            // so an enabled display gets its capture stream immediately and a
+            // disabled display stops contributing frames.
+            deactivateFocus()
+            activateFocus()
+        case Self.blurRadiusKey, Self.saturationKey:
+            guard isFocusActive, currentMode == .deep else { return }
+            pushSettingsToEngine()
         default:
             super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
         }

@@ -33,9 +33,9 @@ final class OverlayWindowController {
     /// Rounded-corner radius matching macOS window corners.
     private let cornerRadius: CGFloat = 10
 
-    /// Small breathing room around the active window so its border is not
-    /// clipped by the mask edge.
-    private let edgePadding: CGFloat = 2
+    /// Keep the cutout on the exact accessibility window frame. Any extra
+    /// breathing room makes Studio visibly drift from the focused window.
+    private let edgePadding: CGFloat = 0
 
     /// Small zone at the bottom of each display where the overlay fades
     /// to transparent via a gradient mask. The auto-hidden Dock slides up
@@ -83,27 +83,29 @@ final class OverlayWindowController {
         content.isOpaque = false
         w.contentView?.layer?.addSublayer(content)
 
-        // Compound mask: shape layer (white fill + window cutout hole)
-        // topped by a gradient that fades to black at the bottom edge,
-        // making the mask transparent where the Dock needs clear desktop.
-        let maskContainer = CALayer()
-        maskContainer.frame = CGRect(origin: .zero, size: frame.size)
+        // The gradient is the content mask and the even-odd shape is its own
+        // mask. Keeping them in a mask chain matters: sibling layers are
+        // composited with source-over, which would paint the gradient back
+        // into the active-window hole and blur the focused window.
+        let fade = CAGradientLayer()
+        fade.frame = CGRect(origin: .zero, size: frame.size)
+        fade.colors = [
+            CGColor(gray: 1, alpha: 0),   // y=0 (bottom): transparent
+            CGColor(gray: 1, alpha: 1),   // y=dockFadeHeight: opaque
+            CGColor(gray: 1, alpha: 1),   // rest: opaque
+        ]
+        let fadeFraction = min(1.0, dockFadeHeight / frame.height)
+        fade.locations = [0, NSNumber(value: fadeFraction), 1]
+        fade.startPoint = CGPoint(x: 0.5, y: 0)
+        fade.endPoint = CGPoint(x: 0.5, y: 1)
 
         let mask = CAShapeLayer()
         mask.fillRule = .evenOdd
         mask.fillColor = CGColor(gray: 1, alpha: 1)
-        mask.frame = maskContainer.bounds
-        maskContainer.addSublayer(mask)
+        mask.frame = fade.bounds
+        fade.mask = mask
 
-        let fade = CAGradientLayer()
-        fade.frame = CGRect(x: 0, y: 0, width: frame.width, height: dockFadeHeight)
-        fade.colors = [CGColor(gray: 0, alpha: 1), CGColor(gray: 1, alpha: 1)]
-        fade.locations = [0, 1]
-        fade.startPoint = CGPoint(x: 0.5, y: 1)
-        fade.endPoint = CGPoint(x: 0.5, y: 0)
-        maskContainer.addSublayer(fade)
-
-        content.mask = maskContainer
+        content.mask = fade
 
         self.window = w
         self.contentLayer = content
@@ -155,19 +157,24 @@ final class OverlayWindowController {
 
     // MARK: - Content
 
-    /// Display the permission-free Studio effect. The mask keeps the active
-    /// window live and sharp while the rest of the display is dimmed.
-    ///
-    /// When `saturation` is below 1.0, a `CIColorControls` background filter
-    /// desaturates desktop content behind the semi-transparent dim layer.
-    /// This runs in the window server compositor with no permission required.
+    /// Prepare a transparent, capture-ready surface for Deep mode. Calling
+    /// this before ScreenCaptureKit attaches ensures the overlay has a real
+    /// window number to exclude and removes any Studio-only compositor state.
+    func prepareForDeep() {
+        ensureWindow()
+        contentLayer?.contents = nil
+        contentLayer?.backgroundColor = nil
+        contentLayer?.backgroundFilters = nil
+    }
+
+    /// Display the permission-free Studio effect. The same cutout mask used
+    /// for Deep mode keeps the active window precisely aligned and live.
     func applyDim(_ color: NSColor, saturation: CGFloat = 1.0) {
         ensureWindow()
         contentLayer?.contents = nil
         contentLayer?.backgroundColor = color.cgColor
 
-        if saturation < 1.0 {
-            let filter = CIFilter(name: "CIColorControls")!
+        if saturation < 1.0, let filter = CIFilter(name: "CIColorControls") {
             filter.setValue(saturation, forKey: kCIInputSaturationKey)
             contentLayer?.backgroundFilters = [filter]
         } else {
@@ -180,6 +187,7 @@ final class OverlayWindowController {
     func applyImage(_ cg: CGImage) {
         ensureWindow()
         contentLayer?.backgroundColor = nil
+        contentLayer?.backgroundFilters = nil
         contentLayer?.contents = cg
     }
 

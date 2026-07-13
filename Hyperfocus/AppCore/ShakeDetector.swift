@@ -18,6 +18,10 @@ final class ShakeDetector {
 
     var onShakeDetected: (() -> Void)?
 
+    deinit {
+        stop()
+    }
+
     // MARK: - Start / Stop
 
     func start() {

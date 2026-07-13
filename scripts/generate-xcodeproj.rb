@@ -47,11 +47,9 @@ files = {
   'DisplayManager.swift'          => [overlay_engine_group, sources_phase_ref],
   'ActiveWindowTracker.swift'     => [overlay_engine_group, sources_phase_ref],
   'MouseTracker.swift'           => [overlay_engine_group, sources_phase_ref],
+  'StripOverlay.swift'            => [overlay_engine_group, sources_phase_ref],
   'BlurEngine.swift'              => [render_pipeline_group, sources_phase_ref],
   'MetalBlurRenderer.swift'       => [render_pipeline_group, sources_phase_ref],
-  'BlurDesatShaders.metal'        => [render_pipeline_group, sources_phase_ref],
-  'CachingEngine.swift'           => [render_pipeline_group, sources_phase_ref],
-  'StateMachine.swift'            => [render_pipeline_group, sources_phase_ref],
   'MenuBarController.swift'       => [app_core_group, sources_phase_ref],
   'ShakeDetector.swift'           => [app_core_group, sources_phase_ref],
   'SettingsView.swift'            => [app_core_group, sources_phase_ref],
@@ -126,7 +124,7 @@ IO.write(PROJECT_FILE, <<~PBXPROJ)
 				#{file_refs['DisplayManager.swift']} /* DisplayManager.swift */,
 				#{file_refs['ActiveWindowTracker.swift']} /* ActiveWindowTracker.swift */,
 				#{file_refs['MouseTracker.swift']} /* MouseTracker.swift */,
-			);
+				#{file_refs['StripOverlay.swift']} /* StripOverlay.swift */,
 			path = OverlayEngine;
 			sourceTree = "<group>";
 		};
@@ -136,8 +134,6 @@ IO.write(PROJECT_FILE, <<~PBXPROJ)
 				#{file_refs['BlurEngine.swift']} /* BlurEngine.swift */,
 				#{file_refs['MetalBlurRenderer.swift']} /* MetalBlurRenderer.swift */,
 				#{file_refs['BlurDesatShaders.metal']} /* BlurDesatShaders.metal */,
-				#{file_refs['CachingEngine.swift']} /* CachingEngine.swift */,
-				#{file_refs['StateMachine.swift']} /* StateMachine.swift */,
 			);
 			path = RenderPipeline;
 			sourceTree = "<group>";

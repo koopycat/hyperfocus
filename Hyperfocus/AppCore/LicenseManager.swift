@@ -73,6 +73,10 @@ final class LicenseManager: ObservableObject {
 
     // MARK: - Gumroad License Validation
 
+    /// Validates a Gumroad license key locally via a checksum.
+    /// This is an honor-system check: the key format is verified but
+    /// there is no server-side activation. Gumroad API integration
+    /// is deferred to post-MVP.
     func validateGumroadKey(_ key: String) -> Bool {
         let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isLocallyValidGumroadKey(normalizedKey) else { return false }
