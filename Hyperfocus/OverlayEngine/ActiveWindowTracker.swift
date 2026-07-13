@@ -36,7 +36,7 @@ final class ActiveWindowTracker {
     /// subsequent change; when it finally fires, the overlays return.
     private let dragSettleInterval: TimeInterval = 0.50
     private var dragSettleTimer: Timer?
-    private var isDragging = false
+    private(set) var isDragging = false
 
     private struct Observation {
         var observer: AXObserver

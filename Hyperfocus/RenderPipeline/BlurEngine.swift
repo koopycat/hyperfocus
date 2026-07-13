@@ -125,9 +125,13 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     // MARK: - Screen Recording Permission
 
-    /// Resolves Screen Recording permission exactly once per session and
-    /// caches the result. Subsequent toggles reuse the cached verdict, so
-    /// the system prompt can never reappear on every toggle.
+    /// Resolves Screen Recording permission. Uses `SCShareableContent.current`
+    /// as the sole check — it never triggers the system prompt. On macOS 26
+    /// `CGPreflightScreenCaptureAccess()` can return false negatives even when
+    /// permission is granted, which would cause `CGRequestScreenCaptureAccess()`
+    /// to fire on every toggle. We avoid both APIs entirely once the cache is
+    /// populated. The initial prompt is triggered only once per app install via
+    /// a UserDefaults flag.
     func requestPermissionIfNeeded() async -> Bool {
         switch screenCapturePermission {
         case .granted:
@@ -148,32 +152,44 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         return granted
     }
 
-    /// Performs the one-time permission probe. Preflight first (no prompt);
-    /// only if that is missing does it ask the system, which shows the
-    /// single user-facing prompt at most once per app lifetime.
+    /// Checks permission via `SCShareableContent.current` (no prompt). Only
+    /// falls back to `CGRequestScreenCaptureAccess` on the very first attempt
+    /// in this app install's lifetime — tracked via UserDefaults to ensure at
+    /// most one system prompt ever appears.
     private func resolvePermission() async -> Bool {
-        let preflight = CGPreflightScreenCaptureAccess()
-        NSLog("[Hyperfocus] SC preflight (already-granted?): \(preflight)")
-        if preflight { return true }
+        let hasPromptedKey = "SCScreenCapturePermissionPrompted"
 
-        let requested = CGRequestScreenCaptureAccess()
-        NSLog("[Hyperfocus] SC request result: \(requested)")
-        if requested { return true }
+        // SCShareableContent is the authoritative, prompt-free check.
+        if let granted = await checkShareableContent() {
+            return granted
+        }
 
-        // CGRequestScreenCaptureAccess returns false for both "denied" and
-        // "undetermined-but-no-prompt-this-call". Probe SCShareableContent
-        // to distinguish: empty displays ⇒ truly denied.
+        // First failure: if we've never prompted before, ask once.
+        if !UserDefaults.standard.bool(forKey: hasPromptedKey) {
+            UserDefaults.standard.set(true, forKey: hasPromptedKey)
+            let requested = CGRequestScreenCaptureAccess()
+            NSLog("[Hyperfocus] SC one-time request result: \(requested)")
+            if requested { return true }
+            // Re-check — prompt may have been granted silently.
+            if let granted = await checkShareableContent() {
+                return granted
+            }
+        }
+
+        return false
+    }
+
+    /// Returns `true` if shareable content enumerates displays, `false` if
+    /// empty (truly denied), or `nil` if the call timed out or errored.
+    private func checkShareableContent() async -> Bool? {
         do {
             let content = try await SCShareableContent.current
-            if content.displays.isEmpty {
-                NSLog("[Hyperfocus] SC shareable content: no displays ⇒ denied")
-                return false
-            }
-            NSLog("[Hyperfocus] SC shareable content: \(content.displays.count) displays ⇒ granted")
-            return true
+            let granted = !content.displays.isEmpty
+            NSLog("[Hyperfocus] SC shareable content: \(content.displays.count) displays ⇒ \(granted ? "granted" : "denied")")
+            return granted
         } catch {
             NSLog("[Hyperfocus] SC shareable content error: \(error)")
-            return false
+            return nil
         }
     }
 

@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let licenseManager = LicenseManager.shared
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var mouseTracker: MouseTracker?
     private var isFocusActive = false
     private var isHiddenForExclusion = false
     private var hasAttachedBlurEngine = false
@@ -51,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeWindowTracker?.onWindowFrameChanged = { [weak self] frame in
             guard let self, self.isFocusActive, !self.isHiddenForExclusion,
                   !self.isFrontmostApplicationExcluded else { return }
+            self.mouseTracker?.windowFrame = frame
             self.applyCutout(frame)
         }
         activeWindowTracker?.onFrontmostApplicationChanged = { [weak self] _ in
@@ -66,6 +68,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // A focus change can happen through the keyboard or while the
             // pointer is outside the window. Presentation follows focus, not
             // pointer location, so always restore the overlay after settling.
+            self.showFocusPresentation()
+        }
+
+        mouseTracker = MouseTracker()
+        mouseTracker?.onMouseExitedWindow = { [weak self] in
+            guard let self, self.isFocusActive else { return }
+            for overlay in self.displayManager?.allOverlays() ?? [] { overlay.hide() }
+            for strip in self.displayManager?.allStripOverlays() ?? [] { strip.hide() }
+        }
+        mouseTracker?.onMouseEnteredWindow = { [weak self] in
+            guard let self, self.isFocusActive, !(self.activeWindowTracker?.isDragging ?? false) else { return }
             self.showFocusPresentation()
         }
         activeWindowTracker?.start()
@@ -132,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         displayManager?.removeAllOverlays()
+        mouseTracker?.stop()
         activeWindowTracker?.stop()
         shakeDetector?.stop()
         blurEngine?.detachAll()
@@ -178,15 +192,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        mouseTracker?.start()
         showFocusPresentation()
     }
 
     private func deactivateFocus() {
+        mouseTracker?.stop()
         isFocusActive = false
         isHiddenForExclusion = false
-        hasAttachedBlurEngine = false
         activeWindowTracker?.stopFrameTracking()
-        blurEngine?.detachAll()
         for overlay in displayManager?.allOverlays() ?? [] { overlay.hide() }
         for strip in displayManager?.allStripOverlays() ?? [] { strip.hide() }
         menuBarController?.setFocusActive(false)
@@ -439,12 +453,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         case Self.focusModeKey:
             guard isFocusActive, !isSynchronizingFocusMode else { return }
+            blurEngine?.detachAll()
+            hasAttachedBlurEngine = false
             deactivateFocus()
             activateFocus()
         case "blurFPS":
             guard isFocusActive, currentMode == .deep else { return }
             // SCStream has no public configuration property for in-place
             // frame-interval updates. Teardown + rebuild is the safe path.
+            blurEngine?.detachAll()
+            hasAttachedBlurEngine = false
             deactivateFocus()
             activateFocus()
         case Self.perDisplaySettingsKey:
@@ -452,6 +470,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Stream filters are display-specific. Rebuild the active session
             // so an enabled display gets its capture stream immediately and a
             // disabled display stops contributing frames.
+            blurEngine?.detachAll()
+            hasAttachedBlurEngine = false
             deactivateFocus()
             activateFocus()
         case Self.blurRadiusKey, Self.saturationKey:
