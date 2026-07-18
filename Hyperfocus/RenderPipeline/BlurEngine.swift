@@ -74,6 +74,15 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// (avoids spamming across multi-display attach / reconfigure cycles).
     private var permissionDeniedReported = false
 
+    /// Latest captured frame per display, retained so a settings change can
+    /// re-render without waiting for ScreenCaptureKit. On a static display the
+    /// stream delivers no new samples for minutes, so a filter switch would
+    /// otherwise leave the old filter visible (or the overlay hidden behind a
+    /// pending transition) indefinitely. Main-queue confined; buffers are
+    /// IOSurface-backed, so retention costs a few MB and no copy. Cleared on
+    /// detach so a torn-down session never re-renders stale content.
+    private var lastPixelBuffers: [CGDirectDisplayID: CVPixelBuffer] = [:]
+
     /// Cached Screen Recording permission verdict. Only the granted state is
     /// cached; denied is not cached so that a user who grants permission in
     /// System Settings while the app is running can activate Deep mode on the
@@ -248,6 +257,12 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         filterParameters = parameters
         self.temporalMode = temporalMode
         if changed { filterRevision &+= 1 }
+        // Apply the new settings immediately on the last captured frames.
+        // Without this, a display whose screen content is static delivers no
+        // new stream samples, so the old filter would stay visible (and a
+        // filter-switch transition would wait on a present that never comes)
+        // until something on that display happens to change.
+        if changed { reRenderCachedFrames() }
         return filterRevision
     }
 
@@ -257,12 +272,31 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     @MainActor
     func setRenderingPaused(_ paused: Bool) {
         renderingPaused = paused
+        guard !paused else { return }
+        // Resume with the freshest cached frames: on a static display the
+        // stream may not deliver a new sample for a long time, so re-rendering
+        // on resume beats showing stale settings until content happens to change.
+        reRenderCachedFrames()
+    }
+
+    /// Re-renders the latest cached frame for every attached display using
+    /// the current filter settings. No-op while paused; per-display in-flight
+    /// and change-detection guards in `scheduleLiveFrame` still apply.
+    @MainActor
+    private func reRenderCachedFrames() {
+        guard !renderingPaused else { return }
+        // Snapshot: scheduleLiveFrame writes back into lastPixelBuffers.
+        for (displayID, buffer) in Array(lastPixelBuffers) {
+            guard let stream = streams[displayID], displayOverlays[displayID] != nil else { continue }
+            scheduleLiveFrame(buffer, from: stream)
+        }
     }
 
     @MainActor
     func detach(from displayID: CGDirectDisplayID) {
         let stream = streams.removeValue(forKey: displayID)
         displayOverlays.removeValue(forKey: displayID)
+        lastPixelBuffers.removeValue(forKey: displayID)
         renderingDisplays.remove(displayID)
         renderer?.clearFrameState(cacheKey: Int(displayID))
         if let stream {
@@ -278,6 +312,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         streams.removeAll()
         displayOverlays.removeAll()
         renderingDisplays.removeAll()
+        lastPixelBuffers.removeAll()
         for displayID in displayIDs {
             renderer?.clearFrameState(cacheKey: Int(displayID))
         }
@@ -645,9 +680,15 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// Must run on the main queue.
     @MainActor
     private func scheduleLiveFrame(_ pixelBuffer: CVPixelBuffer, from stream: SCStream) {
+        guard let displayID = streams.first(where: { $0.value === stream })?.key,
+              let overlay = displayOverlays[displayID]
+        else { return }
+
+        // Cache before the pause/in-flight guards so a resume or a settings
+        // change can re-render the freshest content without a new sample.
+        lastPixelBuffers[displayID] = pixelBuffer
+
         guard !renderingPaused,
-              let displayID = streams.first(where: { $0.value === stream })?.key,
-              let overlay = displayOverlays[displayID],
               !renderingDisplays.contains(displayID),
               let renderer
         else { return }
