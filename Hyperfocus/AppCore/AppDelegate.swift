@@ -14,11 +14,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isHiddenForExclusion = false
     private var hasAttachedBlurEngine = false
 
+    /// Coordinates the two halves of a named-filter transition. The token
+    /// discards stale fade-out completions when the user changes filters
+    /// quickly; the revision comes from BlurEngine's presented frame.
+    private var deepFilterTransitionToken: UInt = 0
+    private var pendingFilterTransitionRevision: UInt?
+    private var pendingFilterTransitionDisplays: Set<CGDirectDisplayID> = []
+
     private static let hasCompletedOnboardingKey = "hasCompletedOnboarding"
     private static let focusModeKey = "hyperfocusMode"
     private static let perDisplaySettingsKey = "perDisplaySettings"
-    private static let blurRadiusKey = "blurRadius"
+    private static let deepBlurRadiusKey = DeepSettings.deepBlurRadiusKey
     private static let saturationKey = "saturation"
+    private static let deepFilterIDKey = DeepSettings.filterIDKey
+    private static let temporalModeKey = DeepSettings.temporalModeKey
+    private static let filterOverridesKey = DeepSettings.overridesKey
 
     private let studioDimOpacity: CGFloat = 0.32
 
@@ -37,6 +47,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeWindowTracker = ActiveWindowTracker()
         displayManager = DisplayManager()
         blurEngine = BlurEngine()
+        blurEngine?.onFramePresented = { [weak self] displayID, revision in
+            guard let self else { return }
+            let completedTransition = self.finishDeepFilterTransition(
+                displayID: displayID,
+                revision: revision
+            )
+            // First Deep frames reveal the initially transparent overlay.
+            // Stale frames during a pending filter fade remain hidden.
+            if !completedTransition,
+               !self.pendingFilterTransitionDisplays.contains(displayID) {
+                self.displayManager?.overlay(for: displayID)?.revealDeepFrame()
+            }
+        }
+        DeepSettings.migrateIfNeeded()
 
         // Window frame changes update the cutout hole on every overlay.
         activeWindowTracker?.onWindowFrameChanged = { [weak self] frame in
@@ -51,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeWindowTracker?.onWindowDragStarted = { [weak self] in
             guard let self, self.isFocusActive else { return }
             self.updateRenderingPause()
+            self.cancelDeepFilterTransition(applyCurrentSettings: true)
             for overlay in self.displayManager?.allOverlays() ?? [] { overlay.hide() }
         }
         activeWindowTracker?.onWindowDragEnded = { [weak self] in
@@ -66,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mouseTracker?.onMouseExitedWindow = { [weak self] in
             guard let self, self.isFocusActive else { return }
             self.updateRenderingPause()
+            self.cancelDeepFilterTransition(applyCurrentSettings: true)
             for overlay in self.displayManager?.allOverlays() ?? [] { overlay.hide() }
         }
         mouseTracker?.onMouseEnteredWindow = { [weak self] in
@@ -107,10 +133,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, forKeyPath: Self.perDisplaySettingsKey, options: .new, context: nil
         )
         UserDefaults.standard.addObserver(
-            self, forKeyPath: Self.blurRadiusKey, options: .new, context: nil
+            self, forKeyPath: Self.deepBlurRadiusKey, options: .new, context: nil
         )
         UserDefaults.standard.addObserver(
             self, forKeyPath: Self.saturationKey, options: .new, context: nil
+        )
+        UserDefaults.standard.addObserver(
+            self, forKeyPath: Self.deepFilterIDKey, options: .new, context: nil
+        )
+        UserDefaults.standard.addObserver(
+            self, forKeyPath: Self.temporalModeKey, options: .new, context: nil
+        )
+        UserDefaults.standard.addObserver(
+            self, forKeyPath: Self.filterOverridesKey, options: .new, context: nil
         )
         updateLaunchAtLogin()
 
@@ -130,8 +165,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.focusModeKey)
         UserDefaults.standard.removeObserver(self, forKeyPath: "blurFPS")
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.perDisplaySettingsKey)
-        UserDefaults.standard.removeObserver(self, forKeyPath: Self.blurRadiusKey)
+        UserDefaults.standard.removeObserver(self, forKeyPath: Self.deepBlurRadiusKey)
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.saturationKey)
+        UserDefaults.standard.removeObserver(self, forKeyPath: Self.deepFilterIDKey)
+        UserDefaults.standard.removeObserver(self, forKeyPath: Self.temporalModeKey)
+        UserDefaults.standard.removeObserver(self, forKeyPath: Self.filterOverridesKey)
     }
 
     // MARK: - Focus Toggle
@@ -164,6 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func deactivateFocus() {
+        cancelDeepFilterTransition()
         mouseTracker?.stop()
         isFocusActive = false
         isHiddenForExclusion = false
@@ -201,6 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Full teardown + rebuild so hot-plugged displays get their own overlay
         // and stream, and removed displays stop capturing.
         guard isFocusActive else { return }
+        cancelDeepFilterTransition()
         isFocusActive = false
         hasAttachedBlurEngine = false
         activeWindowTracker?.stopFrameTracking()
@@ -223,11 +263,122 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Settings
 
-    private func pushSettingsToEngine() {
-        guard currentMode == .deep else { return }
-        let blurRadius = UserDefaults.standard.object(forKey: "blurRadius") as? Double ?? 20
-        let saturation = UserDefaults.standard.object(forKey: "saturation") as? Double ?? 0.0
-        blurEngine?.updateSettings(blurRadius: CGFloat(blurRadius), saturation: CGFloat(saturation))
+    @discardableResult
+    private func pushSettingsToEngine() -> UInt? {
+        guard currentMode == .deep else { return nil }
+        let settings = DeepSettings.resolve()
+        return blurEngine?.updateFilter(
+            filterID: settings.filterID,
+            blurRadius: CGFloat(settings.blurRadius),
+            parameters: settings.parameters,
+            temporalMode: settings.temporalMode
+        )
+    }
+
+    /// Named preset changes have a deliberate fade-through. The new renderer
+    /// settings are applied only after every visible overlay reaches alpha 0;
+    /// each overlay then fades in only after BlurEngine reports a presented
+    /// frame carrying that exact settings revision.
+    private func transitionToUpdatedDeepFilter() {
+        guard hasAttachedBlurEngine else {
+            _ = pushSettingsToEngine()
+            return
+        }
+
+        // During a rapid second selection, the first transition has already
+        // made its windows alpha 0. Reuse those target displays instead of
+        // treating them as invisible and allowing the old revision to reveal.
+        let targetOverlays: [(displayID: CGDirectDisplayID, overlay: OverlayWindowController)]
+        if pendingFilterTransitionDisplays.isEmpty {
+            targetOverlays = displayManager?.visibleOverlays() ?? []
+        } else {
+            targetOverlays = pendingFilterTransitionDisplays.compactMap { displayID in
+                guard let overlay = displayManager?.overlay(for: displayID) else { return nil }
+                return (displayID, overlay)
+            }
+        }
+
+        guard !targetOverlays.isEmpty else {
+            pendingFilterTransitionRevision = nil
+            pendingFilterTransitionDisplays.removeAll()
+            _ = pushSettingsToEngine()
+            return
+        }
+
+        deepFilterTransitionToken &+= 1
+        let transitionGeneration = deepFilterTransitionToken
+        let displayIDs = Set(targetOverlays.map(\.displayID))
+        // Register targets before fade-out starts so an old frame completion
+        // cannot bring an alpha-0 overlay back while a new selection is busy.
+        pendingFilterTransitionRevision = nil
+        pendingFilterTransitionDisplays = displayIDs
+
+        let fadeOutGroup = DispatchGroup()
+        for (_, overlay) in targetOverlays {
+            fadeOutGroup.enter()
+            overlay.fadeOutForDeepFilterChange {
+                fadeOutGroup.leave()
+            }
+        }
+
+        fadeOutGroup.notify(queue: .main) { [weak self] in
+            guard let self,
+                  self.deepFilterTransitionToken == transitionGeneration,
+                  self.isFocusActive,
+                  self.currentMode == .deep
+            else { return }
+
+            guard let revision = self.pushSettingsToEngine() else {
+                for (_, overlay) in targetOverlays {
+                    overlay.fadeInAfterDeepFilterChange()
+                }
+                self.pendingFilterTransitionDisplays.removeAll()
+                return
+            }
+
+            self.pendingFilterTransitionRevision = revision
+            // A stream failure after fade-out should not leave the desktop
+            // permanently transparent. This is a failsafe only; normal paths
+            // fade in from `finishDeepFilterTransition` after a present.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.finishDeepFilterTransitionFailsafe(revision: revision)
+            }
+        }
+    }
+
+    @discardableResult
+    private func finishDeepFilterTransition(displayID: CGDirectDisplayID, revision: UInt) -> Bool {
+        guard pendingFilterTransitionRevision == revision,
+              pendingFilterTransitionDisplays.remove(displayID) != nil
+        else { return false }
+
+        displayManager?.overlay(for: displayID)?.fadeInAfterDeepFilterChange()
+        if pendingFilterTransitionDisplays.isEmpty {
+            pendingFilterTransitionRevision = nil
+        }
+        return true
+    }
+
+    private func finishDeepFilterTransitionFailsafe(revision: UInt) {
+        guard pendingFilterTransitionRevision == revision else { return }
+        let unresolvedDisplays = pendingFilterTransitionDisplays
+        pendingFilterTransitionDisplays.removeAll()
+        pendingFilterTransitionRevision = nil
+        for displayID in unresolvedDisplays {
+            displayManager?.overlay(for: displayID)?.fadeInAfterDeepFilterChange()
+        }
+    }
+
+    private func cancelDeepFilterTransition(applyCurrentSettings: Bool = false) {
+        deepFilterTransitionToken &+= 1
+        pendingFilterTransitionRevision = nil
+        pendingFilterTransitionDisplays.removeAll()
+        // A named selection defers its engine update until fade-out completes.
+        // If focus is hidden before that point, still apply the stored choice
+        // now so the next visible frame on resume uses the new filter.
+        if applyCurrentSettings, isFocusActive, currentMode == .deep {
+            _ = pushSettingsToEngine()
+        }
     }
 
     private var studioDimColor: NSColor {
@@ -264,6 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !isHiddenForExclusion else { return }
             isHiddenForExclusion = true
             updateRenderingPause()
+            cancelDeepFilterTransition(applyCurrentSettings: true)
             for overlay in displayManager?.allOverlays() ?? [] { overlay.hide() }
             return
         }
@@ -300,7 +452,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 if shouldAttachBlurEngine {
                     overlay.prepareForDeep()
-                    overlay.show()
+                    overlay.showAwaitingDeepFrame()
                     blurEngine?.attach(to: overlay, displayID: displayID)
                     attachedBlurEngine = blurEngine != nil
                 } else {
@@ -425,9 +577,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hasAttachedBlurEngine = false
             deactivateFocus()
             activateFocus()
-        case Self.blurRadiusKey, Self.saturationKey:
+        case Self.deepBlurRadiusKey:
             guard isFocusActive, currentMode == .deep else { return }
-            pushSettingsToEngine()
+            _ = pushSettingsToEngine()
+        case Self.filterOverridesKey:
+            guard isFocusActive,
+                  currentMode == .deep,
+                  UserDefaults.standard.string(forKey: Self.deepFilterIDKey) == DeepFilter.customID
+            else { return }
+            _ = pushSettingsToEngine()
+        case Self.saturationKey:
+            guard isFocusActive, currentMode == .studio else { return }
+            // Studio previously applied saturation only on the next focus
+            // presentation update. Reflect its retained slider immediately.
+            showFocusPresentation()
+        case Self.deepFilterIDKey:
+            guard isFocusActive, currentMode == .deep else { return }
+            if UserDefaults.standard.string(forKey: Self.deepFilterIDKey) == DeepFilter.customID {
+                _ = pushSettingsToEngine()
+            } else {
+                transitionToUpdatedDeepFilter()
+            }
+        case Self.temporalModeKey:
+            guard isFocusActive, currentMode == .deep else { return }
+            _ = pushSettingsToEngine()
         default:
             super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
         }

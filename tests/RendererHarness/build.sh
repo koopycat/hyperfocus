@@ -26,10 +26,12 @@ cat > "$APP_DIR/Contents/Info.plist" <<'EOF'
 </dict></plist>
 EOF
 
-swiftc -O \
+swiftc -O -D DEBUG \
     -o "$MACOS_DIR/Harness" \
     "$TEST_DIR/main.swift" \
+    "$SRC_DIR/Hyperfocus/RenderPipeline/DeepFilter.swift" \
     "$SRC_DIR/Hyperfocus/RenderPipeline/MetalBlurRenderer.swift" \
+    "$SRC_DIR/Hyperfocus/OverlayEngine/OverlayWindowController.swift" \
     -framework Cocoa -framework Metal -framework MetalPerformanceShaders \
     -framework QuartzCore -framework CoreVideo
 

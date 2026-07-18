@@ -6,8 +6,8 @@ import QuartzCore
 /// Single rendering engine for Hyperfocus.
 ///
 /// Captures each display at quarter resolution via ScreenCaptureKit, runs the
-/// frames through `MetalBlurRenderer` (MPS 2D Gaussian blur + BT.709
-/// desaturation), and composites the result directly into the overlay's
+/// frames through `MetalBlurRenderer` (MPS 2D Gaussian blur + parameterized
+/// post-processing), and composites the result directly into the overlay's
 /// `CAMetalLayer` -- no CPU readback.  Core Animation enlarges the
 /// low-resolution result from the drawable while compositing, avoiding a
 /// full-display render pass.
@@ -72,9 +72,21 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// next toggle without having to relaunch.
     private var screenCapturePermissionGranted = false
 
-    // Settings (updated live from the UI).
+    // Resolved Deep-mode settings, updated live from the UI. `filterID` is
+    // retained in addition to its parameters so selecting a named preset
+    // always forces a frame even when its values happen to match Custom.
+    private var activeFilterID = DeepFilter.deepID
     private var blurRadius: CGFloat = 20
-    private var saturation: CGFloat = 0.0
+    private var filterParameters = DeepFilter.deep.parameters
+    private var temporalMode: TemporalMode = .live
+    /// Monotonic configuration generation captured with each submitted frame.
+    /// It lets AppDelegate wait for the exact new-filter frame before fading
+    /// an overlay back in, rather than exposing the previous drawable.
+    private var filterRevision: UInt = 0
+
+    /// Called on the main queue after a frame is successfully presented.
+    /// The revision identifies the settings snapshot that generated it.
+    var onFramePresented: ((CGDirectDisplayID, UInt) -> Void)?
 
     /// Thermal/power-aware frame rate. If the system is in low-power mode,
     /// on battery, or under thermal pressure, we cap the user-selected rate to
@@ -196,9 +208,27 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         }
     }
 
-    func updateSettings(blurRadius: CGFloat, saturation: CGFloat) {
+    /// Applies the settings resolved at the AppDelegate -> renderer boundary.
+    /// The Metal renderer compares these values against the visible frame and
+    /// forces exactly one redraw when a filter, parameter, or temporal mode
+    /// changes, including while Frozen mode is active.
+    @discardableResult
+    func updateFilter(
+        filterID: String,
+        blurRadius: CGFloat,
+        parameters: FilterParameters,
+        temporalMode: TemporalMode
+    ) -> UInt {
+        let changed = activeFilterID != filterID
+            || self.blurRadius != blurRadius
+            || filterParameters != parameters
+            || self.temporalMode != temporalMode
+        activeFilterID = filterID
         self.blurRadius = blurRadius
-        self.saturation = saturation
+        filterParameters = parameters
+        self.temporalMode = temporalMode
+        if changed { filterRevision &+= 1 }
+        return filterRevision
     }
 
     /// Suspends or resumes GPU rendering for all displays. Capture streams
@@ -386,7 +416,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
                     image,
                     renderer: renderer,
                     blurRadius: captureSpaceBlurRadius,
-                    saturation: saturation
+                    parameters: renderParameters
                 )
                 let imageToApply = processed ?? image
                 DispatchQueue.main.async { [weak self] in
@@ -396,6 +426,9 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
                           ObjectIdentifier(currentOverlay) == overlayIdentifier
                     else { return }
                     currentOverlay.applyImage(imageToApply)
+                    if !self.renderingPaused {
+                        currentOverlay.revealDeepFrame()
+                    }
                 }
             }
         } catch {
@@ -527,11 +560,25 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         min(maximumCaptureBlurRadius, max(0, blurRadius / captureScale))
     }
 
+    /// Thermal or low-power pressure suppresses bloom. The rest of the
+    /// selected filter stays intact, so Bokeh degrades gracefully rather than
+    /// spending an extra two passes when the system has asked us to be
+    /// conservative. This checks the state itself rather than comparing FPS,
+    /// because a user may already have chosen a rate below the cap.
+    private var renderParameters: FilterParameters {
+        var parameters = filterParameters
+        let processInfo = ProcessInfo.processInfo
+        if processInfo.isLowPowerModeEnabled || processInfo.thermalState != .nominal {
+            parameters.bloomAmount = 0
+        }
+        return parameters
+    }
+
     private func renderStillImage(
         _ image: CGImage,
         renderer: MetalBlurRenderer?,
         blurRadius: CGFloat,
-        saturation: CGFloat
+        parameters: FilterParameters
     ) async -> CGImage? {
         await withCheckedContinuation { continuation in
             renderQueue.async {
@@ -539,7 +586,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
                     returning: renderer?.processCGImage(
                         image,
                         blurRadius: blurRadius,
-                        saturation: saturation
+                        parameters: parameters
                     )
                 )
             }
@@ -570,7 +617,10 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         renderingDisplays.insert(displayID)
         let generation = captureGeneration
         let renderRadius = captureSpaceBlurRadius
-        let renderSaturation = saturation
+        let renderFilterID = activeFilterID
+        let frameParameters = renderParameters
+        let renderTemporalMode = temporalMode
+        let renderRevision = filterRevision
         let cacheKey = Int(displayID)
         // Exclude the focused window's rect from change detection: its content
         // is shown live through the mask hole, so typing must not trigger
@@ -589,11 +639,13 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             renderer.processFrame(
                 pixelBuffer: pixelBuffer,
                 blurRadius: renderRadius,
-                saturation: renderSaturation,
+                filterID: renderFilterID,
+                parameters: frameParameters,
+                temporalMode: renderTemporalMode,
                 metalLayer: metalLayer,
                 cacheKey: cacheKey,
                 skipRect: skipRect,
-                completion: {
+                completion: { result in
                     DispatchQueue.main.async {
                         guard let self else { return }
                         // `detachAll()` clears this set and advances the
@@ -602,6 +654,9 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
                         // marker.
                         guard self.captureGeneration == generation else { return }
                         self.renderingDisplays.remove(displayID)
+                        if result == .rendered {
+                            self.onFramePresented?(displayID, renderRevision)
+                        }
                     }
                 }
             )

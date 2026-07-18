@@ -17,8 +17,13 @@ struct DisplaySetting: Codable, Identifiable, Equatable {
 }
 
 struct HyperfocusSettings: Codable {
+    /// Legacy pre-filter Deep blur setting, retained in exports for downgrade.
     var blurRadius: Double
     var saturation: Double
+    var deepBlurRadius: Double?
+    var deepFilterID: String?
+    var temporalMode: String?
+    var filterOverrides: Data?
     var tintColorData: Data?
     var launchAtLogin: Bool
     var focusMode: String?
@@ -34,6 +39,10 @@ extension HyperfocusSettings {
         return HyperfocusSettings(
             blurRadius: defaults.object(forKey: "blurRadius") as? Double ?? 20,
             saturation: defaults.object(forKey: "saturation") as? Double ?? 0,
+            deepBlurRadius: defaults.object(forKey: DeepSettings.deepBlurRadiusKey) as? Double,
+            deepFilterID: defaults.string(forKey: DeepSettings.filterIDKey),
+            temporalMode: defaults.string(forKey: DeepSettings.temporalModeKey),
+            filterOverrides: defaults.data(forKey: DeepSettings.overridesKey),
             tintColorData: defaults.data(forKey: "tintColorData"),
             launchAtLogin: defaults.bool(forKey: "launchAtLogin"),
             focusMode: defaults.string(forKey: "hyperfocusMode"),
@@ -48,6 +57,27 @@ extension HyperfocusSettings {
         let defaults = UserDefaults.standard
         defaults.set(blurRadius, forKey: "blurRadius")
         defaults.set(saturation, forKey: "saturation")
+        if let deepFilterID, let deepBlurRadius {
+            // Set the values the resolver reads before publishing the filter
+            // id, whose KVO observer can trigger a live Deep transition.
+            defaults.set(deepBlurRadius, forKey: DeepSettings.deepBlurRadiusKey)
+            defaults.set(temporalMode ?? TemporalMode.live.rawValue, forKey: DeepSettings.temporalModeKey)
+            if let filterOverrides {
+                defaults.set(filterOverrides, forKey: DeepSettings.overridesKey)
+            } else {
+                defaults.removeObject(forKey: DeepSettings.overridesKey)
+            }
+            defaults.set(true, forKey: DeepSettings.migratedKey)
+            defaults.set(deepFilterID, forKey: DeepSettings.filterIDKey)
+        } else {
+            // Importing a pre-filter export deliberately re-runs the legacy
+            // migration so its radius and saturation seed a Custom filter.
+            defaults.removeObject(forKey: DeepSettings.filterIDKey)
+            defaults.removeObject(forKey: DeepSettings.deepBlurRadiusKey)
+            defaults.removeObject(forKey: DeepSettings.temporalModeKey)
+            defaults.removeObject(forKey: DeepSettings.overridesKey)
+            defaults.removeObject(forKey: DeepSettings.migratedKey)
+        }
         defaults.set(tintColorData, forKey: "tintColorData")
         defaults.set(launchAtLogin, forKey: "launchAtLogin")
         defaults.set(focusMode, forKey: "hyperfocusMode")
@@ -61,9 +91,12 @@ extension HyperfocusSettings {
 // MARK: - Settings View
 
 struct SettingsView: View {
-    @AppStorage("blurRadius") private var blurRadius: Double = 20
+    @AppStorage(DeepSettings.deepBlurRadiusKey) private var deepBlurRadius: Double = DeepSettings.defaultBlurRadius
     @AppStorage("saturation") private var saturation: Double = 0.0
     @AppStorage("tintColorData") private var tintColorData: Data?
+    @AppStorage(DeepSettings.filterIDKey) private var deepFilterID: String = DeepFilter.deepID
+    @AppStorage(DeepSettings.temporalModeKey) private var temporalMode: String = TemporalMode.live.rawValue
+    @AppStorage(DeepSettings.overridesKey) private var filterOverrides: Data?
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
     @AppStorage("excludedApps") private var excludedAppsData: Data?
     @AppStorage("appGroups") private var appGroupsData: Data?
@@ -77,8 +110,11 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
 
             EffectsTab(
-                blurRadius: $blurRadius,
+                blurRadius: $deepBlurRadius,
                 saturation: $saturation,
+                deepFilterID: $deepFilterID,
+                temporalMode: $temporalMode,
+                filterOverrides: $filterOverrides,
                 selectedTint: $selectedTint
             )
             .tabItem { Label("Effects", systemImage: "camera.filters") }
@@ -92,8 +128,11 @@ struct SettingsView: View {
             GroupsTab()
                 .tabItem { Label("Groups", systemImage: "rectangle.3.group") }
         }
-        .frame(width: 520, height: 380)
-        .onAppear(perform: loadTintColor)
+        .frame(width: 520, height: 540)
+        .onAppear {
+            DeepSettings.migrateIfNeeded()
+            loadTintColor()
+        }
         .onChange(of: selectedTint) { newValue in
             let color = NSColor(newValue)
             tintColorData = try? NSKeyedArchiver.archivedData(
@@ -176,25 +215,125 @@ struct GeneralTab: View {
 struct EffectsTab: View {
     @Binding var blurRadius: Double
     @Binding var saturation: Double
+    @Binding var deepFilterID: String
+    @Binding var temporalMode: String
+    @Binding var filterOverrides: Data?
     @Binding var selectedTint: Color
     @AppStorage("blurFPS") private var blurFPS: Int = 10
+
+    private var customFilter: CustomFilter? {
+        guard let filterOverrides else { return nil }
+        return try? JSONDecoder().decode(CustomFilter.self, from: filterOverrides)
+    }
+
+    private var activeCustomFilter: CustomFilter? {
+        deepFilterID == DeepFilter.customID ? customFilter : nil
+    }
+
+    /// For Custom, use the preset it forked from so its legibility floor is
+    /// retained even when the user adjusts raw sliders.
+    private var basePreset: DeepFilter {
+        if let activeCustomFilter,
+           let preset = DeepFilter.withID(activeCustomFilter.baseID) {
+            return preset
+        }
+        return DeepFilter.withID(deepFilterID) ?? .deep
+    }
+
+    private var displayedParameters: FilterParameters {
+        activeCustomFilter?.parameters ?? basePreset.parameters
+    }
+
+    private var effectiveBlurRadius: Double {
+        max(blurRadius, basePreset.minimumBlurRadius)
+    }
+
+    private var currentTemporalMode: TemporalMode {
+        TemporalMode(rawValue: temporalMode) ?? .live
+    }
+
+    private var filterSelection: Binding<String> {
+        Binding(
+            get: { deepFilterID },
+            set: selectFilter
+        )
+    }
+
+    private var blurRadiusBinding: Binding<Double> {
+        Binding(
+            get: { effectiveBlurRadius },
+            set: { value in
+                if deepFilterID != DeepFilter.customID {
+                    forkToCustom()
+                }
+                blurRadius = value
+            }
+        )
+    }
+
+    private var saturationBinding: Binding<Double> {
+        Binding(
+            get: { Double(displayedParameters.saturation) },
+            set: { value in
+                var custom = activeCustomFilter ?? CustomFilter(
+                    baseID: basePreset.id,
+                    parameters: displayedParameters
+                )
+                custom.parameters.saturation = Float(value)
+                custom.parameters.grainSeed = 0
+                saveCustom(custom)
+            }
+        )
+    }
 
     var body: some View {
         Form {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Blur Radius: \(Int(blurRadius))")
-                    .font(.body)
-                Slider(value: $blurRadius, in: 0...48, step: 1)
-                Text("Higher = softer background")
+                Picker("Deep Filter", selection: filterSelection) {
+                    Section(header: Text("Focus")) {
+                        ForEach(DeepFilter.focusPresets) { filter in
+                            Text(filter.name).tag(filter.id)
+                        }
+                    }
+                    Section(header: Text("Presentation")) {
+                        ForEach(DeepFilter.presentationPresets) { filter in
+                            Text(filter.name).tag(filter.id)
+                        }
+                    }
+                    Section {
+                        Text("Custom").tag(DeepFilter.customID)
+                    }
+                }
+                Text("Focus filters remove more attention-capturing detail. Presentation filters prioritize a polished shared screen.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Saturation: \(Int(saturation * 100))%")
+                Text("Blur Radius: \(Int(effectiveBlurRadius))")
                     .font(.body)
-                Slider(value: $saturation, in: 0...1, step: 0.05)
-                Text("0% = full grayscale background")
+                Slider(value: blurRadiusBinding, in: basePreset.minimumBlurRadius...48, step: 1)
+                Text("A minimum blur is retained so background text stays unreadable.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Filter Saturation: \(Int(saturationBinding.wrappedValue * 100))%")
+                    .font(.body)
+                Slider(value: saturationBinding, in: 0...1, step: 0.05)
+                Text("Adjusting a slider creates a Custom filter without changing the original preset.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Background Updates", selection: $temporalMode) {
+                    ForEach(TemporalMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
+                Text(currentTemporalMode.subtitle)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -211,11 +350,43 @@ struct EffectsTab: View {
                     .foregroundColor(.secondary)
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Studio Saturation: \(Int(saturation * 100))%")
+                    .font(.body)
+                Slider(value: $saturation, in: 0...1, step: 0.05)
+                Text("Used only by the permission-free Studio mode.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             ColorPicker("Studio Dim Color", selection: $selectedTint)
 
             Spacer()
         }
         .padding()
+    }
+
+    private func selectFilter(_ id: String) {
+        if id == DeepFilter.customID {
+            if deepFilterID != DeepFilter.customID {
+                forkToCustom()
+            }
+            return
+        }
+
+        guard let preset = DeepFilter.withID(id) else { return }
+        deepFilterID = preset.id
+        filterOverrides = nil
+    }
+
+    private func forkToCustom() {
+        let custom = CustomFilter(baseID: basePreset.id, parameters: displayedParameters)
+        saveCustom(custom)
+    }
+
+    private func saveCustom(_ custom: CustomFilter) {
+        filterOverrides = try? JSONEncoder().encode(custom)
+        deepFilterID = DeepFilter.customID
     }
 }
 
