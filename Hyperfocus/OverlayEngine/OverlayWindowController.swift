@@ -37,6 +37,12 @@ final class OverlayWindowController {
     /// `contentLayer`.  Set via `configureMetalLayer(device:drawableSize:)`.
     private(set) var metalLayer: CAMetalLayer?
 
+    #if DEBUG
+    /// Exposes the installed production mask chain to the renderer harness.
+    /// This is debug-only so release code keeps the layer tree encapsulated.
+    var testingContentLayer: CALayer? { contentLayer }
+    #endif
+
     /// Every cutout mask in the layer tree (one per content-bearing layer).
     /// `updateMask()` rewrites all of them so the hole stays aligned no
     /// matter which layer is currently visible.
@@ -265,7 +271,10 @@ final class OverlayWindowController {
     /// window number to exclude and removes any Studio-only compositor state.
     func prepareForDeep() {
         ensureWindow()
-        // Metal layer may already be configured; only nil the plain layer.
+        // A prior Deep session's last drawable can otherwise sit above the
+        // new boot still and flash stale filtered pixels on re-enable. Every
+        // attach creates a fresh transparent Metal layer after this reset.
+        removeMetalLayer()
         contentLayer?.contents = nil
         contentLayer?.backgroundColor = nil
         contentLayer?.backgroundFilters = nil
@@ -312,21 +321,93 @@ final class OverlayWindowController {
 
     // MARK: - Visibility
 
+    /// The visibility transition is intentionally long enough to register as
+    /// a state change (a focus-entry ritual) without delaying work.
+    private static let transitionDuration: TimeInterval = 0.3
+
     func show() {
         ensureWindow()
-        window?.alphaValue = 0
-        window?.orderFrontRegardless()
-        window?.animator().alphaValue = 1.0
+        guard let window else { return }
+
+        if !window.isVisible {
+            window.alphaValue = 0
+            window.orderFrontRegardless()
+        }
+        revealDeepFrame()
+    }
+
+    /// Orders a Deep-mode overlay without animating an empty surface. The
+    /// first filtered still or live frame calls `revealDeepFrame()` once it
+    /// exists, so enable has a real visible crossfade instead of fading in
+    /// transparent pixels and popping the effect in later.
+    func showAwaitingDeepFrame() {
+        ensureWindow()
+        guard let window else { return }
+        window.alphaValue = 0
+        if !window.isVisible {
+            window.orderFrontRegardless()
+        }
+    }
+
+    /// Reveals an ordered Deep overlay after a filtered frame has been placed
+    /// in its content or Metal layer. Idempotent for ordinary live presents.
+    func revealDeepFrame() {
+        guard let window, window.isVisible, window.alphaValue < 0.99 else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.transitionDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.animator().alphaValue = 1.0
+        }
     }
 
     func hide() {
-        window?.animator().alphaValue = 0
-        let n = window?.windowNumber
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        guard let window else { return }
+        let windowNumber = window.windowNumber
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.transitionDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.animator().alphaValue = 0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.transitionDuration) { [weak self] in
             // Only order out if still hidden (avoid pulling the rug if show()
             // was called again within the fade window).
-            guard let self, let w = self.window, w.windowNumber == n, w.alphaValue < 0.01 else { return }
-            w.orderOut(nil)
+            guard let self, let window = self.window,
+                  window.windowNumber == windowNumber, window.alphaValue < 0.01
+            else { return }
+            window.orderOut(nil)
+        }
+    }
+
+    var isVisible: Bool {
+        guard let window else { return false }
+        return window.isVisible && window.alphaValue >= 0.01
+    }
+
+    /// First half of a filter-switch transition. AppDelegate applies the new
+    /// settings only after every visible overlay reaches alpha 0, then calls
+    /// `fadeInAfterDeepFilterChange()` only after the matching new frame has
+    /// actually presented. That sequencing prevents old filtered pixels from
+    /// flashing back in at low frame rates.
+    func fadeOutForDeepFilterChange(completion: @escaping () -> Void) {
+        guard let window, window.isVisible, window.alphaValue >= 0.01 else {
+            completion()
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = Self.transitionDuration / 2
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.animator().alphaValue = 0
+        }, completionHandler: completion)
+    }
+
+    /// Second half of a filter-switch transition, called only after the new
+    /// renderer output for the requested settings revision is on screen.
+    func fadeInAfterDeepFilterChange() {
+        guard let window, window.isVisible else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.transitionDuration / 2
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.animator().alphaValue = 1.0
         }
     }
 

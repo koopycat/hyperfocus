@@ -16,6 +16,7 @@
 		A5FC7FD8DCC32712B6940DC4 /* BlurEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA07CF409F41D1564D63D05 /* BlurEngine.swift */; };
 		1F70AEE6F3194C6B5B5552D8 /* MetalBlurRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEB46E9171F80F738BDF744 /* MetalBlurRenderer.swift */; };
 		93696D774290A9D0F36D0525 /* BlurDesatShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = A490527897F8676FEB072671 /* BlurDesatShaders.metal */; };
+		7A1C4E9B2D3F4A5B6C7D8E01 /* DeepFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1C4E9B2D3F4A5B6C7D8E02 /* DeepFilter.swift */; };
 		4618DB3C3B47C0AE995DD879 /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93937AEE1FE13A1D15BFBCB5 /* MenuBarController.swift */; };
 		0CC795515E1BBA81D036A16F /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79350930AD852384F2390D1D /* SettingsView.swift */; };
 		5726A30BB844178BB4126333 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF474A1EB09595AF5DCC1138 /* OnboardingView.swift */; };
@@ -37,6 +38,7 @@
 		BCA07CF409F41D1564D63D05 /* BlurEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BlurEngine.swift"; sourceTree = "<group>"; };
 		DDEB46E9171F80F738BDF744 /* MetalBlurRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MetalBlurRenderer.swift"; sourceTree = "<group>"; };
 		A490527897F8676FEB072671 /* BlurDesatShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = "BlurDesatShaders.metal"; sourceTree = "<group>"; };
+		7A1C4E9B2D3F4A5B6C7D8E02 /* DeepFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DeepFilter.swift"; sourceTree = "<group>"; };
 		93937AEE1FE13A1D15BFBCB5 /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MenuBarController.swift"; sourceTree = "<group>"; };
 		79350930AD852384F2390D1D /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView.swift"; sourceTree = "<group>"; };
 		AF474A1EB09595AF5DCC1138 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OnboardingView.swift"; sourceTree = "<group>"; };
@@ -74,6 +76,7 @@
 				BCA07CF409F41D1564D63D05 /* BlurEngine.swift */,
 				DDEB46E9171F80F738BDF744 /* MetalBlurRenderer.swift */,
 				A490527897F8676FEB072671 /* BlurDesatShaders.metal */,
+				7A1C4E9B2D3F4A5B6C7D8E02 /* DeepFilter.swift */,
 			);
 			path = RenderPipeline;
 			sourceTree = "<group>";
@@ -176,6 +179,7 @@
 				A5FC7FD8DCC32712B6940DC4 /* BlurEngine.swift in Sources */,
 				1F70AEE6F3194C6B5B5552D8 /* MetalBlurRenderer.swift in Sources */,
 				93696D774290A9D0F36D0525 /* BlurDesatShaders.metal in Sources */,
+				7A1C4E9B2D3F4A5B6C7D8E01 /* DeepFilter.swift in Sources */,
 				4618DB3C3B47C0AE995DD879 /* MenuBarController.swift in Sources */,
 				0CC795515E1BBA81D036A16F /* SettingsView.swift in Sources */,
 				5726A30BB844178BB4126333 /* OnboardingView.swift in Sources */,

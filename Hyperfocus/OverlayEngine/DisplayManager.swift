@@ -35,6 +35,14 @@ final class DisplayManager {
         return Array(overlays.values)
     }
 
+    /// Display IDs are needed to match a filter-transition fade-out with the
+    /// exact newly presented renderer frame for that display.
+    func visibleOverlays() -> [(displayID: CGDirectDisplayID, overlay: OverlayWindowController)] {
+        overlays.compactMap { displayID, overlay in
+            overlay.isVisible ? (displayID, overlay) : nil
+        }
+    }
+
     // MARK: - Display Change Handling
 
     private func registerForDisplayChanges() {

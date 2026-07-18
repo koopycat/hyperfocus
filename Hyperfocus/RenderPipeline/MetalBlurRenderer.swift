@@ -1,34 +1,51 @@
+import Foundation
 import Metal
 import MetalPerformanceShaders
 import CoreVideo
 import QuartzCore
 
-/// GPU-accelerated Gaussian blur + desaturation using Metal.
+/// GPU-accelerated Gaussian blur + parameterized post-processing using Metal.
 ///
 /// Pipeline per frame (all GPU, no CPU readback):
 ///   1. `frameHash` compute pass over a strided sample grid of the capture,
 ///      excluding the active-window cutout rect.
-///   2. If the hash matches the last rendered frame AND blur/saturation
-///      settings are unchanged, the frame is dropped -- no render, no present,
-///      no WindowServer recomposite.  On a static desktop this removes almost
-///      all steady-state GPU work; the capture itself is cheap.
+///   2. The active `TemporalMode` decides whether the frame is dropped:
+///      Live renders on any background change, Settled coalesces changes to
+///      one render per interval, Frozen holds the presented frame and only
+///      re-renders on settings changes.
 ///   3. Otherwise: MPSImageGaussianBlur (separable, device-tuned) into an
-///      intermediate, then `desaturate` writes directly into the CAMetalLayer
-///      drawable (which is sized to the quarter-res capture, so Core Animation
-///      performs the upscale while compositing).
+///      intermediate, an optional bloom stage (threshold + MPS blur at half
+///      resolution, scheduled only when `bloomAmount > 0`), then
+///      `postProcess` writes the filtered result directly into the
+///      CAMetalLayer drawable (which is sized to the quarter-res capture, so
+///      Core Animation performs the upscale while compositing).
 ///
 /// Threading: all mutable state is confined to `stateQueue`.  `processFrame`
 /// may be called from any queue; Metal completion handlers bounce back to
 /// `stateQueue` before touching bookkeeping.
+
+enum FrameRenderResult: Equatable {
+    case rendered
+    case skipped
+}
+
 final class MetalBlurRenderer: @unchecked Sendable {
 
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
 
-    private let desaturatePipeline: MTLComputePipelineState
+    private let postProcessPipeline: MTLComputePipelineState
+    private let bloomThresholdPipeline: MTLComputePipelineState
     private let frameHashPipeline: MTLComputePipelineState
     private var mpsBlur: MPSImageGaussianBlur?
     private var mpsBlurSigma: Float = -1   // force first allocation
+    /// Fixed-sigma blur for the half-res bloom texture; created lazily on
+    /// first bloom-enabled frame (sigma is immutable after creation).
+    private var mpsBloomBlur: MPSImageGaussianBlur?
+
+    /// Luminance cutoff for bloom highlight extraction.
+    private static let bloomThreshold: Float = 0.65
+    private static let bloomSigma: Float = 3.0
 
     private var textureCache: CVMetalTextureCache?
 
@@ -47,23 +64,36 @@ final class MetalBlurRenderer: @unchecked Sendable {
     }
 
     /// Per-display change-detection state, keyed by an identifier the caller
-    /// provides (display ID).  `lastHash`/`lastSettings` describe the frame
+    /// provides (display ID).  `lastHash`/`lastParameters` describe the frame
     /// whose pixels are currently visible in the display's drawable.
     private struct FrameState {
         var lastHash: UInt64?
         var lastBlurRadius: CGFloat = -1
-        var lastSaturation: CGFloat = -1
+        var lastFilterID: String?
+        var lastParameters: FilterParameters?
+        var lastTemporalMode: TemporalMode?
+        var lastRenderTime: CFAbsoluteTime = 0
         var hashBuffer: MTLBuffer?
     }
     private var frameStates: [Int: FrameState] = [:]
 
+    /// Half-resolution texture pairs for the bloom stage, keyed like the main
+    /// pool. Allocated lazily because only bloom-enabled filters need them.
+    private struct BloomPair {
+        let threshold: MTLTexture
+        let blurred: MTLTexture
+    }
+    private var bloomPool: [Int: [BloomPair]] = [:]
+    private var bloomPoolIndex: [Int: Int] = [:]
+
     /// Counters for diagnostics and tests.
     private var renderedFrameCount = 0
     private var skippedFrameCount = 0
+    private var bloomPassCount = 0
 
     /// Synchronously-read diagnostics counters.
-    var debugStats: (rendered: Int, skipped: Int) {
-        stateQueue.sync { (renderedFrameCount, skippedFrameCount) }
+    var debugStats: (rendered: Int, skipped: Int, bloomPasses: Int) {
+        stateQueue.sync { (renderedFrameCount, skippedFrameCount, bloomPassCount) }
     }
 
     // MARK: - Init
@@ -78,14 +108,16 @@ final class MetalBlurRenderer: @unchecked Sendable {
             return nil
         }
 
-        guard let desatFn = library.makeFunction(name: "desaturate"),
+        guard let postFn = library.makeFunction(name: "postProcess"),
+              let bloomFn = library.makeFunction(name: "bloomThreshold"),
               let hashFn = library.makeFunction(name: "frameHash") else {
             print("[Hyperfocus] Metal functions not found in library")
             return nil
         }
 
         do {
-            self.desaturatePipeline = try device.makeComputePipelineState(function: desatFn)
+            self.postProcessPipeline = try device.makeComputePipelineState(function: postFn)
+            self.bloomThresholdPipeline = try device.makeComputePipelineState(function: bloomFn)
             self.frameHashPipeline = try device.makeComputePipelineState(function: hashFn)
         } catch {
             print("[Hyperfocus] Failed to create compute pipelines: \(error)")
@@ -103,13 +135,18 @@ final class MetalBlurRenderer: @unchecked Sendable {
     // MARK: - Live Frame (CAMetalLayer path)
 
     /// Process a captured pixel buffer and render the result directly into
-    /// `metalLayer`, skipping the render entirely when neither the captured
-    /// pixels (outside `skipRect`) nor the effect settings changed.
+    /// `metalLayer`, skipping the render when the active temporal mode and
+    /// the change-detection hash agree that nothing relevant changed.
     ///
     /// - Parameters:
     ///   - pixelBuffer: BGRA capture from ScreenCaptureKit at quarter resolution.
     ///   - blurRadius:  Gaussian sigma = blurRadius / 2, clamped.
-    ///   - saturation: 0 = grayscale, 1 = original colour.
+    ///   - filterID: The selected preset or Custom identifier. Included in
+    ///     change detection so a filter switch forces a render even when its
+    ///     resolved parameters match the prior selection.
+    ///   - parameters: Post-processing parameters (`grainSeed` is
+    ///     renderer-managed; callers pass 0).
+    ///   - temporalMode: Decides when a changed background triggers a render.
     ///   - metalLayer: Configured with `.bgra8Unorm`, non-opaque, clear bg,
     ///     and `drawableSize` equal to the capture size.
     ///   - cacheKey: Stable identifier per display for change-detection state.
@@ -120,17 +157,21 @@ final class MetalBlurRenderer: @unchecked Sendable {
     func processFrame(
         pixelBuffer: CVPixelBuffer,
         blurRadius: CGFloat,
-        saturation: CGFloat,
+        filterID: String,
+        parameters: FilterParameters,
+        temporalMode: TemporalMode,
         metalLayer: CAMetalLayer,
         cacheKey: Int,
         skipRect: CGRect,
-        completion: @escaping () -> Void
+        completion: @escaping (FrameRenderResult) -> Void
     ) {
         stateQueue.async {
             self.beginHashPhase(
                 pixelBuffer: pixelBuffer,
                 blurRadius: blurRadius,
-                saturation: saturation,
+                filterID: filterID,
+                parameters: parameters,
+                temporalMode: temporalMode,
                 metalLayer: metalLayer,
                 cacheKey: cacheKey,
                 skipRect: skipRect,
@@ -139,23 +180,58 @@ final class MetalBlurRenderer: @unchecked Sendable {
         }
     }
 
-    /// Runs on `stateQueue`.  Encodes the change-detection hash pass.
+    /// Compares every render-affecting input against the frame currently
+    /// visible for a display. Called only from `stateQueue`.
+    private func settingsChanged(
+        _ state: FrameState,
+        blurRadius: CGFloat,
+        filterID: String,
+        parameters: FilterParameters,
+        temporalMode: TemporalMode
+    ) -> Bool {
+        state.lastBlurRadius != blurRadius
+            || state.lastFilterID != filterID
+            || state.lastParameters != parameters
+            || state.lastTemporalMode != temporalMode
+    }
+
+    /// Runs on `stateQueue`. Encodes the change-detection hash pass unless a
+    /// fully initialized Frozen frame can be dropped before any GPU work.
     private func beginHashPhase(
         pixelBuffer: CVPixelBuffer,
         blurRadius: CGFloat,
-        saturation: CGFloat,
+        filterID: String,
+        parameters: FilterParameters,
+        temporalMode: TemporalMode,
         metalLayer: CAMetalLayer,
         cacheKey: Int,
         skipRect: CGRect,
-        completion: @escaping () -> Void
+        completion: @escaping (FrameRenderResult) -> Void
     ) {
-        guard let sourceTexture = makeTexture(from: pixelBuffer),
-              sourceTexture.width > 0, sourceTexture.height > 0 else {
-            completion()
+        var state = frameStates[cacheKey] ?? FrameState()
+        // Frozen is intentionally a still image. Once it has presented a
+        // frame, neither a source texture nor the hash pass is needed until a
+        // filter, parameter, radius, or temporal-mode change asks for one.
+        if temporalMode == .frozen,
+           state.lastHash != nil,
+           !settingsChanged(
+               state,
+               blurRadius: blurRadius,
+               filterID: filterID,
+               parameters: parameters,
+               temporalMode: temporalMode
+           ) {
+            skippedFrameCount += 1
+            completion(.skipped)
             return
         }
 
-        var state = frameStates[cacheKey] ?? FrameState()
+        guard let sourceTexture = makeTexture(from: pixelBuffer),
+              sourceTexture.width > 0, sourceTexture.height > 0 else {
+            completion(.skipped)
+            return
+        }
+
         if state.hashBuffer == nil {
             state.hashBuffer = device.makeBuffer(
                 length: MemoryLayout<UInt64>.size,
@@ -167,18 +243,17 @@ final class MetalBlurRenderer: @unchecked Sendable {
         guard let hashBuffer = state.hashBuffer,
               let hashCommandBuffer = commandQueue.makeCommandBuffer(),
               let hashEncoder = hashCommandBuffer.makeComputeCommandEncoder() else {
-            completion()
+            completion(.skipped)
             return
         }
 
         hashEncoder.setComputePipelineState(frameHashPipeline)
         hashEncoder.setTexture(sourceTexture, index: 0)
         hashEncoder.setBuffer(hashBuffer, offset: 0, index: 0)
-        var rect = simd_uint4(
-            UInt32(max(0, skipRect.origin.x)),
-            UInt32(max(0, skipRect.origin.y)),
-            UInt32(max(0, skipRect.size.width)),
-            UInt32(max(0, skipRect.size.height))
+        var rect = sanitizedHashSkipRect(
+            skipRect,
+            sourceWidth: sourceTexture.width,
+            sourceHeight: sourceTexture.height
         )
         hashEncoder.setBytes(&rect, length: MemoryLayout<simd_uint4>.size, index: 1)
         hashEncoder.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
@@ -187,7 +262,7 @@ final class MetalBlurRenderer: @unchecked Sendable {
 
         hashCommandBuffer.addCompletedHandler { [weak self] _ in
             guard let self else {
-                completion()
+                completion(.skipped)
                 return
             }
             self.stateQueue.async {
@@ -195,7 +270,9 @@ final class MetalBlurRenderer: @unchecked Sendable {
                     hashBuffer: hashBuffer,
                     sourceTexture: sourceTexture,
                     blurRadius: blurRadius,
-                    saturation: saturation,
+                    filterID: filterID,
+                    parameters: parameters,
+                    temporalMode: temporalMode,
                     metalLayer: metalLayer,
                     cacheKey: cacheKey,
                     completion: completion
@@ -205,27 +282,103 @@ final class MetalBlurRenderer: @unchecked Sendable {
         hashCommandBuffer.commit()
     }
 
-    /// Runs on `stateQueue`.  Compares the fresh hash against the visible
-    /// frame and either drops the frame or encodes the render pass.
+    /// Converts an AppKit-derived cutout into the unsigned capture-space
+    /// values used by the hash shader. Accessibility and display transitions
+    /// can briefly produce non-finite geometry, which must mean "no skipped
+    /// region" rather than trapping while converting `NaN` to `UInt32`.
+    private func sanitizedHashSkipRect(
+        _ skipRect: CGRect,
+        sourceWidth: Int,
+        sourceHeight: Int
+    ) -> simd_uint4 {
+        guard skipRect.origin.x.isFinite,
+              skipRect.origin.y.isFinite,
+              skipRect.width.isFinite,
+              skipRect.height.isFinite,
+              skipRect.width > 0,
+              skipRect.height > 0
+        else {
+            return simd_uint4(repeating: 0)
+        }
+
+        let bounds = CGRect(
+            x: 0,
+            y: 0,
+            width: CGFloat(sourceWidth),
+            height: CGFloat(sourceHeight)
+        )
+        let clipped = skipRect.integral.intersection(bounds)
+        guard !clipped.isNull,
+              !clipped.isEmpty,
+              clipped.minX.isFinite,
+              clipped.minY.isFinite,
+              clipped.width.isFinite,
+              clipped.height.isFinite
+        else {
+            return simd_uint4(repeating: 0)
+        }
+
+        // `clipped` is integral and contained in texture bounds, making each
+        // conversion safe and keeping the shader's x + width arithmetic in
+        // range as well.
+        return simd_uint4(
+            UInt32(Int(clipped.minX)),
+            UInt32(Int(clipped.minY)),
+            UInt32(Int(clipped.width)),
+            UInt32(Int(clipped.height))
+        )
+    }
+
+    /// Runs on `stateQueue`.  Applies the temporal-mode policy to the fresh
+    /// hash and either drops the frame or encodes the render pass.
     private func finishHashPhase(
         hashBuffer: MTLBuffer,
         sourceTexture: MTLTexture,
         blurRadius: CGFloat,
-        saturation: CGFloat,
+        filterID: String,
+        parameters: FilterParameters,
+        temporalMode: TemporalMode,
         metalLayer: CAMetalLayer,
         cacheKey: Int,
-        completion: @escaping () -> Void
+        completion: @escaping (FrameRenderResult) -> Void
     ) {
         let hash = hashBuffer.contents().load(as: UInt64.self)
         let state = frameStates[cacheKey] ?? FrameState()
 
-        let settingsChanged = state.lastBlurRadius != blurRadius
-            || state.lastSaturation != saturation
+        let settingsChanged = self.settingsChanged(
+            state,
+            blurRadius: blurRadius,
+            filterID: filterID,
+            parameters: parameters,
+            temporalMode: temporalMode
+        )
         let contentChanged = state.lastHash != hash
+        let hasPresented = state.lastHash != nil
+        let now = CFAbsoluteTimeGetCurrent()
 
-        guard contentChanged || settingsChanged else {
+        // Temporal policy. On skipped frames the stored hash and render time
+        // are deliberately NOT updated, so a Settled-mode skip keeps the
+        // pending change visible to the gate and a later frame renders once
+        // the interval elapses.
+        let shouldRender: Bool
+        switch temporalMode {
+        case .live:
+            shouldRender = contentChanged || settingsChanged
+        case .settled:
+            if settingsChanged || !hasPresented {
+                shouldRender = true
+            } else if contentChanged {
+                shouldRender = (now - state.lastRenderTime) >= TemporalMode.settledInterval
+            } else {
+                shouldRender = false
+            }
+        case .frozen:
+            shouldRender = settingsChanged || !hasPresented
+        }
+
+        guard shouldRender else {
             skippedFrameCount += 1
-            completion()
+            completion(.skipped)
             return
         }
 
@@ -235,7 +388,7 @@ final class MetalBlurRenderer: @unchecked Sendable {
         guard let drawable = metalLayer.nextDrawable(),
               let pair = dequeueTexturePair(width: width, height: height),
               let commandBuffer = commandQueue.makeCommandBuffer() else {
-            completion()
+            completion(.skipped)
             return
         }
 
@@ -246,20 +399,37 @@ final class MetalBlurRenderer: @unchecked Sendable {
                         sourceTexture: sourceTexture,
                         destinationTexture: pair.intermediate)
 
-        // Desaturate writes straight into the drawable when its size matches
+        // Optional bloom stage (threshold + half-res blur). Only scheduled
+        // for bloom-enabled filters; the returned texture is nil on failure
+        // and the post kernel then runs with bloomAmount forced to 0.
+        var bloomTexture: MTLTexture?
+        if parameters.bloomAmount > 0 {
+            bloomTexture = encodeBloomStage(source: pair.intermediate, commandBuffer: commandBuffer)
+        }
+
+        // Grain is re-seeded per rendered frame from the content hash, so a
+        // static frame always shows identical grain and re-renders of the
+        // same content never shimmer.
+        var effectiveParameters = parameters
+        effectiveParameters.grainSeed = Float(hash % 4096)
+        if bloomTexture == nil { effectiveParameters.bloomAmount = 0 }
+
+        // Post-process writes straight into the drawable when its size matches
         // the capture (the normal case -- drawableSize is configured to the
         // capture size).  Otherwise fall back to a clamped blit.
         let drawableMatches = drawable.texture.width == width && drawable.texture.height == height
         if drawableMatches {
-            encodeDesaturate(source: pair.intermediate,
-                             destination: drawable.texture,
-                             saturation: saturation,
-                             commandBuffer: commandBuffer)
+            encodePostProcess(source: pair.intermediate,
+                              bloom: bloomTexture,
+                              destination: drawable.texture,
+                              parameters: effectiveParameters,
+                              commandBuffer: commandBuffer)
         } else {
-            encodeDesaturate(source: pair.intermediate,
-                             destination: pair.output,
-                             saturation: saturation,
-                             commandBuffer: commandBuffer)
+            encodePostProcess(source: pair.intermediate,
+                              bloom: bloomTexture,
+                              destination: pair.output,
+                              parameters: effectiveParameters,
+                              commandBuffer: commandBuffer)
             if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
                 let copyW = min(width, drawable.texture.width)
                 let copyH = min(height, drawable.texture.height)
@@ -275,21 +445,29 @@ final class MetalBlurRenderer: @unchecked Sendable {
         }
 
         commandBuffer.present(drawable)
-        commandBuffer.addCompletedHandler { [weak self] _ in
+        commandBuffer.addCompletedHandler { [weak self] buffer in
             guard let self else {
-                completion()
+                completion(.skipped)
                 return
             }
             self.stateQueue.async {
-                // Bookkeeping is updated only after the GPU finished, so a
-                // dropped or failed render never freezes the visible state.
+                // Bookkeeping is updated only after the GPU finished
+                // successfully, so a dropped or failed render never freezes
+                // the visible state.
+                guard buffer.status == .completed else {
+                    completion(.skipped)
+                    return
+                }
                 var state = self.frameStates[cacheKey] ?? FrameState()
                 state.lastHash = hash
                 state.lastBlurRadius = blurRadius
-                state.lastSaturation = saturation
+                state.lastFilterID = filterID
+                state.lastParameters = parameters
+                state.lastTemporalMode = temporalMode
+                state.lastRenderTime = now
                 self.frameStates[cacheKey] = state
                 self.renderedFrameCount += 1
-                completion()
+                completion(.rendered)
             }
         }
         commandBuffer.commit()
@@ -303,50 +481,91 @@ final class MetalBlurRenderer: @unchecked Sendable {
         }
     }
 
-    // MARK: - Desaturate Encode Helper
+    // MARK: - Post-Process Encode Helpers
 
-    private func encodeDesaturate(
+    private func encodePostProcess(
         source: MTLTexture,
+        bloom: MTLTexture?,
         destination: MTLTexture,
-        saturation: CGFloat,
+        parameters: FilterParameters,
         commandBuffer: MTLCommandBuffer
     ) {
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
-        encoder.setComputePipelineState(desaturatePipeline)
+        encoder.setComputePipelineState(postProcessPipeline)
         encoder.setTexture(source, index: 0)
         encoder.setTexture(destination, index: 1)
-        var sat = Float(saturation)
-        encoder.setBytes(&sat, length: MemoryLayout<Float>.size, index: 0)
+        // Dummy binding when bloom is off; the kernel short-circuits on
+        // bloomAmount == 0 before sampling.
+        encoder.setTexture(bloom ?? source, index: 2)
+        var uniforms = parameters
+        if bloom == nil { uniforms.bloomAmount = 0 }
+        encoder.setBytes(&uniforms, length: MemoryLayout<FilterParameters>.stride, index: 0)
 
-        let w = desaturatePipeline.threadExecutionWidth
-        let h = desaturatePipeline.maxTotalThreadsPerThreadgroup / w
+        let w = postProcessPipeline.threadExecutionWidth
+        let h = postProcessPipeline.maxTotalThreadsPerThreadgroup / w
         encoder.dispatchThreads(MTLSize(width: source.width, height: source.height, depth: 1),
                                 threadsPerThreadgroup: MTLSize(width: w, height: h, depth: 1))
         encoder.endEncoding()
     }
 
+    /// Extracts highlights above the luminance threshold into a
+    /// half-resolution texture and blurs them. Returns the blurred bloom
+    /// texture for the additive composite in `postProcess`, or nil when
+    /// allocation fails (the caller then renders without bloom).
+    private func encodeBloomStage(
+        source: MTLTexture,
+        commandBuffer: MTLCommandBuffer
+    ) -> MTLTexture? {
+        let width = max(1, source.width / 2)
+        let height = max(1, source.height / 2)
+        guard let pair = dequeueBloomPair(width: width, height: height) else { return nil }
+
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return nil }
+        encoder.setComputePipelineState(bloomThresholdPipeline)
+        encoder.setTexture(source, index: 0)
+        encoder.setTexture(pair.threshold, index: 1)
+        var threshold = MetalBlurRenderer.bloomThreshold
+        encoder.setBytes(&threshold, length: MemoryLayout<Float>.size, index: 0)
+        let w = bloomThresholdPipeline.threadExecutionWidth
+        let h = bloomThresholdPipeline.maxTotalThreadsPerThreadgroup / w
+        encoder.dispatchThreads(MTLSize(width: width, height: height, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: w, height: h, depth: 1))
+        encoder.endEncoding()
+
+        if mpsBloomBlur == nil {
+            mpsBloomBlur = MPSImageGaussianBlur(device: device, sigma: MetalBlurRenderer.bloomSigma)
+        }
+        mpsBloomBlur?.encode(commandBuffer: commandBuffer,
+                             sourceTexture: pair.threshold,
+                             destinationTexture: pair.blurred)
+
+        bloomPassCount += 1
+        return pair.blurred
+    }
+
     // MARK: - CGImage Processing (still-screenshot boot path)
 
-    /// Process a `CGImage` through the blur+desat pipeline and return a new
-    /// `CGImage`.  Used once at session start for the instant still-screenshot
-    /// boot frame; the CPU readback cost is negligible for a single shot.
+    /// Process a `CGImage` through the blur + post-processing pipeline and
+    /// return a new `CGImage`. Used once at session start for the instant
+    /// still-screenshot boot frame; the CPU readback cost is negligible for a
+    /// single shot.
     ///
     /// Serialized against live-frame work via `stateQueue` because it shares
-    /// the texture pool and MPS filter.
+    /// the texture pool, MPS blur, and optional bloom textures.
     func processCGImage(
         _ image: CGImage,
         blurRadius: CGFloat,
-        saturation: CGFloat
+        parameters: FilterParameters
     ) -> CGImage? {
         stateQueue.sync {
-            processCGImageLocked(image, blurRadius: blurRadius, saturation: saturation)
+            processCGImageLocked(image, blurRadius: blurRadius, parameters: parameters)
         }
     }
 
     private func processCGImageLocked(
         _ image: CGImage,
         blurRadius: CGFloat,
-        saturation: CGFloat
+        parameters: FilterParameters
     ) -> CGImage? {
         let width  = image.width
         let height = image.height
@@ -385,10 +604,21 @@ final class MetalBlurRenderer: @unchecked Sendable {
                         sourceTexture: input,
                         destinationTexture: pair.intermediate)
 
-        encodeDesaturate(source: pair.intermediate,
-                         destination: pair.output,
-                         saturation: saturation,
-                         commandBuffer: commandBuffer)
+        var bloomTexture: MTLTexture?
+        if parameters.bloomAmount > 0 {
+            bloomTexture = encodeBloomStage(source: pair.intermediate, commandBuffer: commandBuffer)
+        }
+
+        // The still-image path has no content hash. Keep its grain seed at 0
+        // so repeated processing of the same screenshot is pixel-identical.
+        var effectiveParameters = parameters
+        effectiveParameters.grainSeed = 0
+        if bloomTexture == nil { effectiveParameters.bloomAmount = 0 }
+        encodePostProcess(source: pair.intermediate,
+                          bloom: bloomTexture,
+                          destination: pair.output,
+                          parameters: effectiveParameters,
+                          commandBuffer: commandBuffer)
 
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
@@ -480,6 +710,35 @@ final class MetalBlurRenderer: @unchecked Sendable {
         }
         texturePool[key] = pairs
         poolIndex[key] = 1    // next call returns [0]
+        return pairs[0]
+    }
+
+    /// Returns a double-buffered pair of half-resolution bloom textures.
+    /// The first receives the threshold output; MPS writes the blurred result
+    /// into the second. This is separate from the main pool so non-Bokeh
+    /// filters never allocate its memory.
+    private func dequeueBloomPair(width: Int, height: Int) -> BloomPair? {
+        let key = width * 100_000 + height
+
+        if let pool = bloomPool[key] {
+            let idx = bloomPoolIndex[key, default: 0]
+            bloomPoolIndex[key] = (idx + 1) % pool.count
+            return pool[idx]
+        }
+
+        var pairs: [BloomPair] = []
+        let usage: MTLTextureUsage = [.shaderWrite, .shaderRead]
+        for _ in 0..<2 {
+            guard let threshold = makeTexture(width: width, height: height, usage: usage),
+                  let blurred = makeTexture(width: width, height: height, usage: usage)
+            else {
+                print("[Hyperfocus] Failed to allocate bloom textures (\(width)x\(height)); rendering without bloom")
+                return nil
+            }
+            pairs.append(BloomPair(threshold: threshold, blurred: blurred))
+        }
+        bloomPool[key] = pairs
+        bloomPoolIndex[key] = 1
         return pairs[0]
     }
 

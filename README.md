@@ -29,7 +29,9 @@ Requires **macOS 12.3** (Monterey) or newer.
 1. Launch Hyperfocus. A focus icon appears in the menu bar.
 2. Click the icon → **Turn On Focus**. Your active window stays sharp; everything behind it recedes.
 3. Fine-tune in **Settings**:
-   - Studio dim color, blur radius, and saturation
+   - Studio dim color and saturation
+   - Deep-mode Focus filters, blur radius, filter saturation, and background updates
+   - Presentation filters for polished screen sharing and recordings
    - Enable or disable the effect per display
    - An app exclusion list for apps that should suspend the effect when frontmost
 4. Toggle from the menu bar.
@@ -54,9 +56,11 @@ Studio works without Screen Recording permission:
 
 Deep mode is available during the seven-day trial and after Pro activation.
 
-- **Live blur** of background windows via ScreenCaptureKit
-- Adjustable blur radius and saturation
-- A still frame is shown before the live stream starts
+- **Focus filters**: Deep, Ink, Fog, Ember, Vignette, and Paper keep background text unreadable while changing the mood of the workspace
+- **Presentation filters**: Frost and Bokeh prioritize a polished shared screen when visual appeal matters more than maximal attentional austerity
+- Adjustable blur radius and filter saturation, with a protected minimum blur so background text stays unreadable
+- **Background updates**: Live follows changes, Settled coalesces them, and Frozen holds one calm still frame
+- A filtered still frame is shown before the live stream starts
 
 Deep mode requires Screen Recording permission, requested only when you enable it.
 The app uses the permission solely to render the on-device blur effect.
