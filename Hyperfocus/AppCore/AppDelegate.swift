@@ -50,25 +50,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         activeWindowTracker?.onWindowDragStarted = { [weak self] in
             guard let self, self.isFocusActive else { return }
+            self.updateRenderingPause()
             for overlay in self.displayManager?.allOverlays() ?? [] { overlay.hide() }
-            for strip in self.displayManager?.allStripOverlays() ?? [] { strip.hide() }
         }
         activeWindowTracker?.onWindowDragEnded = { [weak self] in
             guard let self, self.isFocusActive else { return }
             // A focus change can happen through the keyboard or while the
             // pointer is outside the window. Presentation follows focus, not
             // pointer location, so always restore the overlay after settling.
+            self.updateRenderingPause()
             self.showFocusPresentation()
         }
 
         mouseTracker = MouseTracker()
         mouseTracker?.onMouseExitedWindow = { [weak self] in
             guard let self, self.isFocusActive else { return }
+            self.updateRenderingPause()
             for overlay in self.displayManager?.allOverlays() ?? [] { overlay.hide() }
-            for strip in self.displayManager?.allStripOverlays() ?? [] { strip.hide() }
         }
         mouseTracker?.onMouseEnteredWindow = { [weak self] in
             guard let self, self.isFocusActive, !(self.activeWindowTracker?.isDragging ?? false) else { return }
+            self.updateRenderingPause()
             self.showFocusPresentation()
         }
         activeWindowTracker?.start()
@@ -77,6 +79,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, selector: #selector(handleFocusToggle(_:)),
             name: .hyperfocusToggle, object: nil
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleThermalThrottlingChanged(_:)),
+            name: BlurEngine.thermalThrottlingChanged, object: nil
+        )
+
         NotificationCenter.default.addObserver(
             self, selector: #selector(screenParametersChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil
@@ -161,14 +168,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isFocusActive = false
         isHiddenForExclusion = false
         activeWindowTracker?.stopFrameTracking()
+        // Stop capture and rendering. Without this, Deep-mode streams keep
+        // capturing and rendering into hidden windows indefinitely after the
+        // user turns Hyperfocus off -- a pure GPU/energy drain.
+        blurEngine?.detachAll()
+        blurEngine?.setRenderingPaused(false)
+        hasAttachedBlurEngine = false
         for overlay in displayManager?.allOverlays() ?? [] { overlay.hide() }
-        for strip in displayManager?.allStripOverlays() ?? [] { strip.hide() }
         menuBarController?.setFocusActive(false)
+    }
+
+    /// Pauses Deep-mode GPU rendering whenever no overlay is visible (window
+    /// drag, pointer outside the focused window, excluded app frontmost).
+    /// Derived from a single place so mismatched pause/resume pairs cannot
+    /// leave rendering stuck on or off. Capture streams keep running -- they
+    /// are cheap and make resume instant -- only render/present is skipped.
+    private func updateRenderingPause() {
+        let dragging = activeWindowTracker?.isDragging ?? false
+        let mouseOutside: Bool = {
+            guard let tracker = mouseTracker, tracker.windowFrame != nil else { return false }
+            return !tracker.isMouseInsideWindow
+        }()
+        let paused = isHiddenForExclusion || dragging || mouseOutside
+        blurEngine?.setRenderingPaused(paused)
     }
 
     private func applyCutout(_ frame: CGRect?) {
         for overlay in displayManager?.allOverlays() ?? [] { overlay.setCutout(frame) }
-        for strip in displayManager?.allStripOverlays() ?? [] { strip.setCutout(frame) }
     }
 
     @objc private func screenParametersChanged() {
@@ -183,6 +209,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.activateFocus()
         }
+    }
+
+    @objc private func handleThermalThrottlingChanged(_ notification: Notification) {
+        guard isFocusActive, currentMode == .deep else { return }
+        // Restart the Deep-mode session so each stream starts with the new
+        // effective frame rate. Mirrors the blurFPS KVO path.
+        blurEngine?.detachAll()
+        hasAttachedBlurEngine = false
+        deactivateFocus()
+        activateFocus()
     }
 
     // MARK: - Settings
@@ -227,12 +263,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if isFrontmostApplicationExcluded {
             guard !isHiddenForExclusion else { return }
             isHiddenForExclusion = true
+            updateRenderingPause()
             for overlay in displayManager?.allOverlays() ?? [] { overlay.hide() }
-            for strip in displayManager?.allStripOverlays() ?? [] { strip.hide() }
             return
         }
 
         isHiddenForExclusion = false
+        updateRenderingPause()
         // `setFrontmostWindowFrame` only emits when the rect changes. Two
         // focused windows can share the same frame, so app activation itself
         // must also restore the presentation.
@@ -254,12 +291,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let displayID = screen.displayID
             guard isDisplayEffectEnabled(displayID) else {
                 displayManager?.overlay(for: displayID)?.hide()
-                displayManager?.stripOverlay(for: displayID)?.hide()
                 continue
             }
 
             if currentMode == .deep {
-                displayManager?.stripOverlay(for: displayID)?.hide()
                 guard let overlay = displayManager?.overlay(for: displayID) else { continue }
                 overlay.setCutout(frame)
 
@@ -272,7 +307,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     overlay.show()
                 }
             } else {
-                displayManager?.stripOverlay(for: displayID)?.hide()
                 guard let overlay = displayManager?.overlay(for: displayID) else { continue }
                 overlay.setCutout(frame)
                 overlay.applyDim(studioDim, saturation: CGFloat(studioSaturation))

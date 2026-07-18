@@ -1,13 +1,23 @@
 import Cocoa
 import CoreImage
 import QuartzCore
+import Metal
 
 /// One borderless overlay window per display.
 ///
 /// The window covers the whole screen at level 19 (below Dock=20 and menu
-/// bar=24). Its content layer holds the blurred desktop image. A
+/// bar=24).  Its content layer holds the blurred desktop image.  A
 /// `CAShapeLayer` mask carves a rounded-rect hole over the active window so
 /// the sharp, live window shows through the gap.
+///
+/// Two content-bearing layers can coexist:
+/// - `contentLayer` (plain CALayer) shows the Studio dim color and the
+///   Deep-mode still-screenshot boot frame.
+/// - `metalLayer` (CAMetalLayer) sits above it and shows the live Deep-mode
+///   stream.  It stays transparent until the first drawable is presented, so
+///   the boot frame below remains visible while the stream starts.
+/// Both carry an identical fade+cutout mask chain; `updateMask()` keeps all
+/// of them in sync.
 ///
 /// Geometry notes:
 /// - All input frames are in AppKit global coordinates (bottom-left origin,
@@ -20,11 +30,17 @@ final class OverlayWindowController {
     private let screen: NSScreen
     private var window: NSWindow?
 
-    /// Layer that displays the blurred desktop image.
+    /// Layer that displays the Studio dim and the Deep-mode boot still frame.
     private var contentLayer: CALayer?
 
-    /// Mask that carves the rounded active-window hole.
-    private var maskLayer: CAShapeLayer?
+    /// Metal-backed layer for zero-copy Deep mode rendering, above
+    /// `contentLayer`.  Set via `configureMetalLayer(device:drawableSize:)`.
+    private(set) var metalLayer: CAMetalLayer?
+
+    /// Every cutout mask in the layer tree (one per content-bearing layer).
+    /// `updateMask()` rewrites all of them so the hole stays aligned no
+    /// matter which layer is currently visible.
+    private var shapeMasks: [CAShapeLayer] = []
 
     /// Active window frame in AppKit global coordinates, or nil to cover
     /// the whole screen (no hole).
@@ -64,14 +80,11 @@ final class OverlayWindowController {
         w.isOpaque = false
         w.hasShadow = false
         w.backgroundColor = .clear
-        w.level = NSWindow.Level(rawValue: 19)  // above menu bar (24)
+        w.level = NSWindow.Level(rawValue: 19)
         w.ignoresMouseEvents = true
         w.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         w.sharingType = .none
 
-        // Disable layer-tree flattening so each overlay is composited
-        // independently (matches the design decision, avoids implicit
-        // offscreen passes when several overlays coexist).
         w.contentView?.wantsLayer = true
         w.contentView?.layer?.isOpaque = false
 
@@ -82,13 +95,24 @@ final class OverlayWindowController {
         content.minificationFilter = .linear
         content.isOpaque = false
         w.contentView?.layer?.addSublayer(content)
+        installMaskChain(on: content)
 
-        // The gradient is the content mask and the even-odd shape is its own
-        // mask. Keeping them in a mask chain matters: sibling layers are
-        // composited with source-over, which would paint the gradient back
-        // into the active-window hole and blur the focused window.
+        self.window = w
+        self.contentLayer = content
+
+        updateMask()
+    }
+
+    /// Attaches the Dock-fade gradient + even-odd cutout shape mask chain to
+    /// a layer.  The gradient is the content mask and the shape is the
+    /// gradient's mask -- keeping them chained matters: sibling layers are
+    /// composited source-over, which would paint the gradient back into the
+    /// active-window hole.
+    private func installMaskChain(on layer: CALayer) {
+        let frame = CGRect(origin: .zero, size: screen.frame.size)
+
         let fade = CAGradientLayer()
-        fade.frame = CGRect(origin: .zero, size: frame.size)
+        fade.frame = frame
         fade.colors = [
             CGColor(gray: 1, alpha: 0),   // y=0 (bottom): transparent
             CGColor(gray: 1, alpha: 1),   // y=dockFadeHeight: opaque
@@ -105,13 +129,64 @@ final class OverlayWindowController {
         mask.frame = fade.bounds
         fade.mask = mask
 
-        content.mask = fade
+        layer.mask = fade
+        shapeMasks.append(mask)
+    }
 
-        self.window = w
-        self.contentLayer = content
-        self.maskLayer = mask
+    // MARK: - Metal Layer
+
+    /// Create and attach a `CAMetalLayer` for zero-copy Deep mode rendering.
+    ///
+    /// The layer is placed above the plain `contentLayer`, which stays in
+    /// place for the still-screenshot boot frame.  Idempotent: repeated
+    /// attaches reuse the existing layer and only update the drawable size,
+    /// instead of stacking full-screen Metal layers that would double
+    /// WindowServer compositing work.
+    ///
+    /// `drawableSize` MUST be the capture (quarter-res) pixel size.  Without
+    /// this, CAMetalLayer derives a full-display drawable and the renderer's
+    /// quarter-res output lands in a corner of a mostly stale texture --
+    /// verified to render garbage on 94% of the screen.  With the correct
+    /// size, Core Animation upscales the small drawable to the full-screen
+    /// bounds while compositing: the enlargement is free and drawable memory
+    /// drops 16x (e.g. 14.7 MB -> 0.9 MB per buffer).
+    func configureMetalLayer(device: MTLDevice, drawableSize: CGSize) {
+        ensureWindow()
+
+        if let existing = metalLayer {
+            existing.drawableSize = drawableSize
+            return
+        }
+
+        let frame = screen.frame
+        let layer = CAMetalLayer()
+        layer.device = device
+        layer.pixelFormat = .bgra8Unorm
+        layer.framebufferOnly = false
+        layer.isOpaque = false
+        layer.backgroundColor = CGColor.clear
+        layer.frame = CGRect(origin: .zero, size: frame.size)
+        layer.drawableSize = drawableSize
+
+        installMaskChain(on: layer)
+        window?.contentView?.layer?.addSublayer(layer)
+
+        self.metalLayer = layer
 
         updateMask()
+    }
+
+    /// Removes the Metal layer when leaving Deep mode (e.g. switching to
+    /// Studio mid-session), freeing its drawables and compositor cost.
+    private func removeMetalLayer() {
+        guard let layer = metalLayer else { return }
+        if let chain = layer.mask as? CAGradientLayer,
+           let shape = chain.mask as? CAShapeLayer,
+           let idx = shapeMasks.firstIndex(of: shape) {
+            shapeMasks.remove(at: idx)
+        }
+        layer.removeFromSuperlayer()
+        metalLayer = nil
     }
 
     // MARK: - Cutout
@@ -124,9 +199,8 @@ final class OverlayWindowController {
         updateMask()
     }
 
-
     private func updateMask() {
-        guard let mask = maskLayer else { return }
+        guard !shapeMasks.isEmpty else { return }
 
         let local = CGRect(origin: .zero, size: screen.frame.size)
         let path = CGMutablePath()
@@ -152,7 +226,36 @@ final class OverlayWindowController {
             }
         }
 
-        mask.path = path
+        for mask in shapeMasks {
+            mask.path = path
+        }
+    }
+
+    // MARK: - Capture-space Cutout
+
+    /// The active-window cutout in capture (quarter-res) pixel coordinates,
+    /// top-left origin -- the coordinate space of the captured texture.
+    ///
+    /// `MetalBlurRenderer` excludes this rect from its frame-change hash: the
+    /// focused window shows through the mask hole live and unprocessed, so its
+    /// content (typing, cursor blinks) must not count as a background change.
+    /// Returns `.zero` when there is no cutout (whole screen is processed).
+    func cutoutInCapturePixels(captureScale: CGFloat) -> CGRect {
+        guard let cf = cutoutFrame, !cf.isNull, cf.width > 0, cf.height > 0 else {
+            return .zero
+        }
+
+        let scale = screen.backingScaleFactor / captureScale
+        let localX = (cf.minX - screen.frame.minX) * scale
+        // Flip from AppKit bottom-left origin to texture top-left origin.
+        let localYTop = (screen.frame.height - (cf.minY - screen.frame.minY) - cf.height) * scale
+
+        let captureSize = CGSize(
+            width: screen.frame.width * scale,
+            height: screen.frame.height * scale
+        )
+        let rect = CGRect(x: localX, y: localYTop, width: cf.width * scale, height: cf.height * scale)
+        return rect.integral.intersection(CGRect(origin: .zero, size: captureSize))
     }
 
     // MARK: - Content
@@ -162,6 +265,7 @@ final class OverlayWindowController {
     /// window number to exclude and removes any Studio-only compositor state.
     func prepareForDeep() {
         ensureWindow()
+        // Metal layer may already be configured; only nil the plain layer.
         contentLayer?.contents = nil
         contentLayer?.backgroundColor = nil
         contentLayer?.backgroundFilters = nil
@@ -171,6 +275,10 @@ final class OverlayWindowController {
     /// for Deep mode keeps the active window precisely aligned and live.
     func applyDim(_ color: NSColor, saturation: CGFloat = 1.0) {
         ensureWindow()
+        // Studio never renders through Metal; drop the layer entirely so a
+        // Deep -> Studio switch does not leave a stale full-screen layer
+        // composited on every frame.
+        removeMetalLayer()
         contentLayer?.contents = nil
         contentLayer?.backgroundColor = color.cgColor
 
@@ -184,11 +292,15 @@ final class OverlayWindowController {
 
     /// Display a processed (blurred) image of the whole screen. The mask
     /// handles the active-window cutout; this just paints the pixels.
+    ///
+    /// Used for the still-screenshot boot frame and as a fallback when
+    /// Metal-layer rendering is unavailable.
     func applyImage(_ cg: CGImage) {
         ensureWindow()
-        contentLayer?.backgroundColor = nil
-        contentLayer?.backgroundFilters = nil
-        contentLayer?.contents = cg
+        guard let content = contentLayer else { return }
+        content.backgroundColor = nil
+        content.backgroundFilters = nil
+        content.contents = cg
     }
 
     /// CGWindowID of the overlay window, used by the capture filter to

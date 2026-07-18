@@ -1,13 +1,16 @@
 import Cocoa
 import ScreenCaptureKit
 import Metal
+import QuartzCore
 
 /// Single rendering engine for Hyperfocus.
 ///
 /// Captures each display at quarter resolution via ScreenCaptureKit, runs the
-/// frames through `MetalBlurRenderer` (fused blur + BT.709 desaturation), and
-/// hands the low-resolution result to the matching overlay. Core Animation
-/// enlarges that result while compositing, avoiding a full-display render pass.
+/// frames through `MetalBlurRenderer` (MPS 2D Gaussian blur + BT.709
+/// desaturation), and composites the result directly into the overlay's
+/// `CAMetalLayer` -- no CPU readback.  Core Animation enlarges the
+/// low-resolution result from the drawable while compositing, avoiding a
+/// full-display render pass.
 /// Each overlay's own window is excluded from capture to prevent feedback flicker.
 ///
 /// Requires Screen Recording permission (prompted on first activation).
@@ -27,10 +30,13 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     /// Frame rate for ScreenCaptureKit streams. User-configurable in
     /// Settings → Effects; defaults to 10 for a good energy/smoothness
-    /// balance on most Macs.
+    /// balance on most Macs. `integer(forKey:)` returns 0 when the key was
+    /// never written (fresh install), so map 0 to the default instead of
+    /// clamping to 1 FPS.
     private var framesPerSecond: Int32 {
         let raw = UserDefaults.standard.integer(forKey: "blurFPS")
-        return Int32(min(max(raw, 1), 30))
+        let effective = raw == 0 ? 10 : raw
+        return Int32(min(max(effective, 1), 30))
     }
 
     private let captureScale: CGFloat = 4
@@ -49,23 +55,90 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// queue that increases latency and energy use.
     private var renderingDisplays: Set<CGDirectDisplayID> = []
 
+    /// Main-queue confined. While true, captured frames are dropped before any
+    /// Metal work is scheduled. Used when every overlay is invisible (window
+    /// drag, mouse left the focused window, excluded app frontmost): the
+    /// capture keeps running for instant resume, but no GPU render, present,
+    /// or WindowServer recomposite happens for content nobody can see.
+    private var renderingPaused = false
+
     /// Guards the permission-denied alert so it is shown at most once per session
     /// (avoids spamming across multi-display attach / reconfigure cycles).
     private var permissionDeniedReported = false
 
-    /// Cached Screen Recording permission verdict for this session.
-    /// Resolved exactly once; subsequent toggles reuse it so the system
-    /// prompt never reappears within the same process lifetime.
-    private enum ScreenCapturePermission { case unknown, granted, denied }
-    private var screenCapturePermission: ScreenCapturePermission = .unknown
+    /// Cached Screen Recording permission verdict. Only the granted state is
+    /// cached; denied is not cached so that a user who grants permission in
+    /// System Settings while the app is running can activate Deep mode on the
+    /// next toggle without having to relaunch.
+    private var screenCapturePermissionGranted = false
 
     // Settings (updated live from the UI).
     private var blurRadius: CGFloat = 20
     private var saturation: CGFloat = 0.0
 
+    /// Thermal/power-aware frame rate. If the system is in low-power mode,
+    /// on battery, or under thermal pressure, we cap the user-selected rate to
+    /// keep Deep mode from worsening the situation. The stream is restarted
+    /// when the effective rate changes, so this adapts live.
+    private var effectiveFramesPerSecond: Int32 {
+        let user = framesPerSecond
+        let processInfo = ProcessInfo.processInfo
+
+        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            return max(1, min(user, 10))
+        }
+
+        switch processInfo.thermalState {
+        case .serious, .critical:
+            return max(1, min(user, 5))
+        case .fair:
+            return max(1, min(user, 15))
+        default:
+            return user
+        }
+    }
+
+    private var lastEffectiveFramesPerSecond: Int32 = -1
+    static let thermalThrottlingChanged = Notification.Name("com.hyperfocus.thermalThrottlingChanged")
+
     override init() {
         super.init()
         self.renderer = MetalBlurRenderer()
+        self.lastEffectiveFramesPerSecond = effectiveFramesPerSecond
+        registerThermalAndPowerObservers()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    private func registerThermalAndPowerObservers() {
+        let center = NotificationCenter.default
+        center.addObserver(
+            self,
+            selector: #selector(thermalOrPowerStateChanged),
+            name: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil
+        )
+        // Low-power mode on macOS does not always expose a typed Swift
+        // constant, so use the raw Foundation notification string.
+        center.addObserver(
+            self,
+            selector: #selector(thermalOrPowerStateChanged),
+            name: Notification.Name("NSProcessInfoPowerStateDidChangeNotification"),
+            object: nil
+        )
+    }
+
+    @objc private func thermalOrPowerStateChanged() {
+        let newFPS = effectiveFramesPerSecond
+        guard newFPS != lastEffectiveFramesPerSecond else { return }
+        lastEffectiveFramesPerSecond = newFPS
+        NSLog("[Hyperfocus] Thermal/power change: effective FPS now \(newFPS)")
+        NotificationCenter.default.post(
+            name: Self.thermalThrottlingChanged,
+            object: nil
+        )
     }
 
     // MARK: - Lifecycle
@@ -73,6 +146,19 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     func attach(to overlay: OverlayWindowController, displayID: CGDirectDisplayID) {
         NSLog("[Hyperfocus] attach display \(displayID)")
         displayOverlays[displayID] = overlay
+
+        // Configure the Metal layer before any rendering starts so the
+        // still-screenshot boot frame and live stream share the same surface.
+        // The drawable must be sized to the quarter-res capture; a full-size
+        // drawable would leave 94% of every presented texture as stale garbage
+        // and cost 16x the drawable memory.
+        if let device = renderer?.device {
+            overlay.configureMetalLayer(
+                device: device,
+                drawableSize: capturePixelSize(for: displayID)
+            )
+        }
+
         let generation = captureGeneration
         Task { [weak self] in
             guard let self,
@@ -80,18 +166,32 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
                   self.captureGeneration == generation
             else { return }
 
+            // A single content snapshot covers both the boot screenshot and
+            // the stream filter. The overlay window is already on-screen (the
+            // AppDelegate shows it before attaching), so its windowNumber is
+            // visible in this snapshot and can be excluded reliably.
+            let content = await self.fetchShareableContent()
+            guard self.captureGeneration == generation else { return }
+            guard let content = content, !content.displays.isEmpty else {
+                NSLog("[Hyperfocus] Shareable content empty after permission grant for display \(displayID)")
+                await self.presentPermissionDeniedAlert()
+                return
+            }
+
             // Show a blurred still screenshot immediately so activation
             // feels instant; the live stream blends over the top.
             await self.captureStillScreenshot(
                 for: displayID,
                 overlay: overlay,
-                generation: generation
+                generation: generation,
+                content: content
             )
             guard self.captureGeneration == generation else { return }
             await self.startCapture(
                 for: displayID,
                 overlay: overlay,
-                generation: generation
+                generation: generation,
+                content: content
             )
         }
     }
@@ -101,10 +201,18 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         self.saturation = saturation
     }
 
+    /// Suspends or resumes GPU rendering for all displays. Capture streams
+    /// keep running (cheap, and resume is instant); only the Metal render and
+    /// drawable present are skipped.
+    func setRenderingPaused(_ paused: Bool) {
+        renderingPaused = paused
+    }
+
     func detach(from displayID: CGDirectDisplayID) {
         let stream = streams.removeValue(forKey: displayID)
         displayOverlays.removeValue(forKey: displayID)
         renderingDisplays.remove(displayID)
+        renderer?.clearFrameState(cacheKey: Int(displayID))
         if let stream {
             Task { try? await stream.stopCapture() }
         }
@@ -113,9 +221,13 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     func detachAll() {
         captureGeneration &+= 1
         let streamsToStop = Array(streams.values)
+        let displayIDs = Array(streams.keys)
         streams.removeAll()
         displayOverlays.removeAll()
         renderingDisplays.removeAll()
+        for displayID in displayIDs {
+            renderer?.clearFrameState(cacheKey: Int(displayID))
+        }
         Task {
             for stream in streamsToStop {
                 try? await stream.stopCapture()
@@ -123,30 +235,27 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         }
     }
 
+    /// Returns the current shareable content. This is the expensive TCC IPC
+    /// call that enumerates displays and windows; call it as few times as
+    /// possible per activation.
+    private func fetchShareableContent() async -> SCShareableContent? {
+        try? await SCShareableContent.current
+    }
+
     // MARK: - Screen Recording Permission
 
-    /// Resolves Screen Recording permission. Uses `SCShareableContent.current`
-    /// as the sole check — it never triggers the system prompt. On macOS 26
-    /// `CGPreflightScreenCaptureAccess()` can return false negatives even when
-    /// permission is granted, which would cause `CGRequestScreenCaptureAccess()`
-    /// to fire on every toggle. We avoid both APIs entirely once the cache is
-    /// populated. The initial prompt is triggered only once per app install via
-    /// a UserDefaults flag.
+    /// Resolves Screen Recording permission. Always re-checks the current TCC
+    /// state via `SCShareableContent.current` (no prompt) so a user who grants
+    /// permission in System Settings while Hyperfocus is running can use Deep
+    /// mode without relaunching. Only the granted state is cached.
     func requestPermissionIfNeeded() async -> Bool {
-        switch screenCapturePermission {
-        case .granted:
+        if screenCapturePermissionGranted {
             NSLog("[Hyperfocus] SC permission: cached granted")
             return true
-        case .denied:
-            NSLog("[Hyperfocus] SC permission: cached denied")
-            await presentPermissionDeniedAlert()
-            return false
-        case .unknown:
-            break
         }
 
         let granted = await resolvePermission()
-        screenCapturePermission = granted ? .granted : .denied
+        screenCapturePermissionGranted = granted
         NSLog("[Hyperfocus] SC permission resolved this session: \(granted ? "GRANTED" : "DENIED")")
         if !granted { await presentPermissionDeniedAlert() }
         return granted
@@ -154,14 +263,18 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     /// Checks permission via `SCShareableContent.current` (no prompt). Only
     /// falls back to `CGRequestScreenCaptureAccess` on the very first attempt
-    /// in this app install's lifetime — tracked via UserDefaults to ensure at
-    /// most one system prompt ever appears.
+    /// in this app install's lifetime -- tracked via UserDefaults to ensure at
+    /// most one system prompt ever appears. If the user has already been
+    /// prompted and denied, subsequent calls return immediately after the
+    /// prompt-free check, so granting permission in System Settings is picked
+    /// up on the next toggle without a relaunch.
     private func resolvePermission() async -> Bool {
         let hasPromptedKey = "SCScreenCapturePermissionPrompted"
 
         // SCShareableContent is the authoritative, prompt-free check.
-        if let granted = await checkShareableContent() {
-            return granted
+        // Re-check every time so a mid-session Settings grant is honored.
+        if let granted = await checkShareableContent(), granted {
+            return true
         }
 
         // First failure: if we've never prompted before, ask once.
@@ -170,7 +283,10 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             let requested = CGRequestScreenCaptureAccess()
             NSLog("[Hyperfocus] SC one-time request result: \(requested)")
             if requested { return true }
-            // Re-check — prompt may have been granted silently.
+            // The prompt was shown but the user may still be deciding, or the
+            // TCC database has not updated yet. Give it a short moment and
+            // re-check once.
+            try? await Task.sleep(nanoseconds: 500_000_000)
             if let granted = await checkShareableContent() {
                 return granted
             }
@@ -203,7 +319,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         alert.informativeText = """
             Hyperfocus needs Screen Recording access to blur the area behind your \
             active window. Grant access in System Settings ▸ Privacy & Security ▸ \
-            Screen Recording, then quit and relaunch Hyperfocus.
+            Screen Recording, then toggle Hyperfocus off and back on.
             """
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Open System Settings")
@@ -220,18 +336,31 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     /// Capture a single still image of the display, blur it, and push it to
     /// the overlay before the live stream delivers its first frame.
+    ///
+    /// Uses the CGImage path (applyImage) for the one-shot boot frame;
+    /// the CPU readback cost is negligible for a single shot.
+    ///
+    /// - Parameter content: Optional pre-fetched shareable content so the
+    ///   activation path does not fetch it twice.
     private func captureStillScreenshot(
         for displayID: CGDirectDisplayID,
         overlay: OverlayWindowController,
-        generation: UInt
+        generation: UInt,
+        content: SCShareableContent? = nil
     ) async {
         do {
-            let content = try await SCShareableContent.current
+            let resolvedContent: SCShareableContent?
+            if let content = content {
+                resolvedContent = content
+            } else {
+                resolvedContent = await fetchShareableContent()
+            }
+            guard let resolvedContent = resolvedContent else { return }
             guard captureGeneration == generation else { return }
-            guard let display = content.displays.first(where: { $0.displayID == displayID }) else { return }
+            guard let display = resolvedContent.displays.first(where: { $0.displayID == displayID }) else { return }
 
             // Exclude the overlay window from its own capture.
-            let excludedWindows = content.windows.filter { $0.windowID == overlay.windowNumber }
+            let excludedWindows = resolvedContent.windows.filter { $0.windowID == overlay.windowNumber }
             let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
 
             let screenshotConfig = SCStreamConfiguration()
@@ -299,21 +428,33 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     private func startCapture(
         for displayID: CGDirectDisplayID,
         overlay: OverlayWindowController,
-        generation: UInt
+        generation: UInt,
+        content: SCShareableContent? = nil
     ) async {
+        // Record the effective FPS actually used for this stream so thermal
+        // change notifications compare against the live setting, not a stale
+        // baseline from before the last user edit.
+        lastEffectiveFramesPerSecond = effectiveFramesPerSecond
+
         var streamToStart: SCStream?
         do {
-            let content = try await SCShareableContent.current
+            let resolvedContent: SCShareableContent?
+            if let content = content {
+                resolvedContent = content
+            } else {
+                resolvedContent = await fetchShareableContent()
+            }
+            guard let resolvedContent = resolvedContent else { return }
             guard captureGeneration == generation else { return }
-            guard let display = content.displays.first(where: { $0.displayID == displayID }) else { return }
+            guard let display = resolvedContent.displays.first(where: { $0.displayID == displayID }) else { return }
 
-            let excludedWindows = content.windows.filter { $0.windowID == overlay.windowNumber }
+            let excludedWindows = resolvedContent.windows.filter { $0.windowID == overlay.windowNumber }
             let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
 
             let config = SCStreamConfiguration()
             config.width = captureDimension(display.width)
             config.height = captureDimension(display.height)
-            config.minimumFrameInterval = CMTime(value: 1, timescale: framesPerSecond)
+            config.minimumFrameInterval = CMTime(value: 1, timescale: effectiveFramesPerSecond)
             config.showsCursor = false
             if #available(macOS 13.0, *) { config.capturesAudio = false }
             config.pixelFormat = kCVPixelFormatType_32BGRA
@@ -336,7 +477,30 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             if let streamToStart, streams[displayID] === streamToStart {
                 streams.removeValue(forKey: displayID)
             }
-            print("[Hyperfocus] Failed to start capture for display \(displayID): \(error)")
+            NSLog("[Hyperfocus] Failed to start capture for display \(displayID): \(error)")
+            await self.presentStreamFailureAlert(displayID: displayID, error: error)
+        }
+    }
+
+    // MARK: - Alerts
+
+    @MainActor
+    private func presentStreamFailureAlert(displayID: CGDirectDisplayID, error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Could Not Start Blur Stream"
+        alert.informativeText = """
+            Hyperfocus could not start the ScreenCaptureKit stream for display \"(displayID)\". \
+            Make sure Screen Recording access is still granted in System Settings ▸ \
+            Privacy & Security ▸ Screen Recording. Error: \\(error.localizedDescription)
+            """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Dismiss")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
 
@@ -344,6 +508,16 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     private func captureDimension(_ dimension: Int) -> Int {
         max(1, Int(CGFloat(dimension) / captureScale))
+    }
+
+    /// Pixel size of the quarter-res capture for a display, derived from
+    /// CoreGraphics display info so it is available synchronously at attach
+    /// time (before the first SCShareableContent fetch resolves).
+    private func capturePixelSize(for displayID: CGDirectDisplayID) -> CGSize {
+        CGSize(
+            width: captureDimension(CGDisplayPixelsWide(displayID)),
+            height: captureDimension(CGDisplayPixelsHigh(displayID))
+        )
     }
 
     /// Settings are expressed in display pixels, while Metal receives a
@@ -386,38 +560,51 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     /// Must run on the main queue.
     private func scheduleLiveFrame(_ pixelBuffer: CVPixelBuffer, from stream: SCStream) {
-        guard let displayID = streams.first(where: { $0.value === stream })?.key,
+        guard !renderingPaused,
+              let displayID = streams.first(where: { $0.value === stream })?.key,
               let overlay = displayOverlays[displayID],
-              !renderingDisplays.contains(displayID)
+              !renderingDisplays.contains(displayID),
+              let renderer
         else { return }
 
         renderingDisplays.insert(displayID)
         let generation = captureGeneration
-        let overlayIdentifier = ObjectIdentifier(overlay)
         let renderRadius = captureSpaceBlurRadius
         let renderSaturation = saturation
-        let renderer = renderer
+        let cacheKey = Int(displayID)
+        // Exclude the focused window's rect from change detection: its content
+        // is shown live through the mask hole, so typing must not trigger
+        // background re-renders.
+        let skipRect = overlay.cutoutInCapturePixels(captureScale: captureScale)
+
+        // Grab the Metal layer while on the main queue (UI objects are
+        // main-thread-only).  Metal layer is configured in attach() before
+        // capture starts, so it should never be nil here.
+        guard let metalLayer = overlay.metalLayer else {
+            renderingDisplays.remove(displayID)
+            return
+        }
 
         renderQueue.async { [weak self] in
-            let image = renderer?.processFrame(
+            renderer.processFrame(
                 pixelBuffer: pixelBuffer,
                 blurRadius: renderRadius,
-                saturation: renderSaturation
+                saturation: renderSaturation,
+                metalLayer: metalLayer,
+                cacheKey: cacheKey,
+                skipRect: skipRect,
+                completion: {
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        // `detachAll()` clears this set and advances the
+                        // generation.  Do not let a queued frame from the
+                        // old session clear the new session's in-flight
+                        // marker.
+                        guard self.captureGeneration == generation else { return }
+                        self.renderingDisplays.remove(displayID)
+                    }
+                }
             )
-
-            DispatchQueue.main.async {
-                guard let self else { return }
-                // `detachAll()` clears this set and advances the generation.
-                // Do not let a queued frame from the old session clear the
-                // new session's in-flight marker or paint over its first frame.
-                guard self.captureGeneration == generation else { return }
-                self.renderingDisplays.remove(displayID)
-                guard let currentOverlay = self.displayOverlays[displayID],
-                      ObjectIdentifier(currentOverlay) == overlayIdentifier,
-                      let image
-                else { return }
-                currentOverlay.applyImage(image)
-            }
         }
     }
 }

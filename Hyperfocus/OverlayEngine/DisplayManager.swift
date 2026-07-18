@@ -2,10 +2,8 @@ import Cocoa
 
 /// Manages overlay windows across all connected displays.
 /// Deep mode uses OverlayWindowController (single window + captured image + mask).
-/// Studio mode uses StripOverlay (4 borderless windows per display, no permissions).
 final class DisplayManager {
     private var overlays: [CGDirectDisplayID: OverlayWindowController] = [:]
-    private var stripOverlays: [CGDirectDisplayID: StripOverlay] = [:]
 
     init() {
         registerForDisplayChanges()
@@ -17,17 +15,12 @@ final class DisplayManager {
             if overlays[displayID] == nil {
                 overlays[displayID] = OverlayWindowController(screen: screen)
             }
-            if stripOverlays[displayID] == nil {
-                stripOverlays[displayID] = StripOverlay(screen: screen)
-            }
         }
     }
 
     func removeAllOverlays() {
         for (_, overlay) in overlays { overlay.orderOut() }
-        for (_, strip) in stripOverlays { strip.orderOut() }
         overlays.removeAll()
-        stripOverlays.removeAll()
     }
 
     func overlay(for screen: NSScreen) -> OverlayWindowController? {
@@ -38,16 +31,8 @@ final class DisplayManager {
         return overlays[displayID]
     }
 
-    func stripOverlay(for displayID: CGDirectDisplayID) -> StripOverlay? {
-        return stripOverlays[displayID]
-    }
-
     func allOverlays() -> [OverlayWindowController] {
         return Array(overlays.values)
-    }
-
-    func allStripOverlays() -> [StripOverlay] {
-        return Array(stripOverlays.values)
     }
 
     // MARK: - Display Change Handling
@@ -70,16 +55,13 @@ final class DisplayManager {
         // Remove for disconnected displays
         for id in existingIDs.subtracting(currentIDs) {
             overlays[id]?.orderOut()
-            stripOverlays[id]?.orderOut()
             overlays.removeValue(forKey: id)
-            stripOverlays.removeValue(forKey: id)
         }
 
         // Add for newly connected displays
         for id in currentIDs.subtracting(existingIDs) {
             if let screen = NSScreen.screens.first(where: { $0.displayID == id }) {
                 overlays[id] = OverlayWindowController(screen: screen)
-                stripOverlays[id] = StripOverlay(screen: screen)
             }
         }
     }
