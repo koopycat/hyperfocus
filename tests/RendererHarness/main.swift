@@ -388,6 +388,43 @@ check(
 )
 migrationDefaults.removePersistentDomain(forName: migrationSuite)
 
+// Imported settings are untrusted. Numeric values must be normalized before
+// they reach the SwiftUI labels, shader uniforms, or persisted frame rate.
+let unsafeParameters = FilterParameters(
+    saturation: Float.infinity,
+    exposure: Float.nan,
+    blackPoint: -1,
+    contrast: Float.infinity,
+    tintColor: SIMD3(Float.nan, 2, -1),
+    tintOpacity: Float.infinity,
+    duotoneA: SIMD3(Float.nan, 2, -1),
+    duotoneB: SIMD3(Float.nan, 2, -1),
+    duotoneAmount: Float.infinity,
+    vignetteStrength: Float.infinity,
+    vignetteFeather: Float.nan,
+    grainAmount: Float.infinity,
+    bloomAmount: Float.infinity
+)
+let safeParameters = DeepSettings.sanitizedParameters(unsafeParameters)
+check(
+    "persisted numeric settings are finite and bounded",
+    DeepSettings.sanitizedBlurRadius(Double.nan) == DeepSettings.defaultBlurRadius
+        && DeepSettings.sanitizedBlurRadius(-10) == 0
+        && DeepSettings.sanitizedBlurRadius(99) == DeepSettings.maximumBlurRadius
+        && DeepSettings.sanitizedSaturation(Double.infinity) == 0
+        && DeepSettings.sanitizedSaturation(-1) == 0
+        && DeepSettings.sanitizedFramesPerSecond(0) == DeepSettings.defaultFramesPerSecond
+        && DeepSettings.sanitizedFramesPerSecond(99) == 30
+        && safeParameters.saturation == 0
+        && safeParameters.exposure == 0
+        && safeParameters.blackPoint == 0
+        && safeParameters.contrast == 1
+        && safeParameters.tintColor == SIMD3(0, 1, 0)
+        && safeParameters.tintOpacity == 0
+        && safeParameters.vignetteFeather == 0.5
+        && safeParameters.bloomAmount == 0
+)
+
 // Existing GPU-pipeline scenarios, now through the Deep preset.
 let key = 42
 let deep = DeepFilter.deep

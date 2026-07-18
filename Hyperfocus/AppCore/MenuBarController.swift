@@ -10,6 +10,7 @@ import Cocoa
 /// framework-init time with *no* hotkey configured.  Consolidating under the
 /// `kTCCServiceAccessibility` permission (already needed for the AX window
 /// observer) gives the user one clear prompt instead of two obscure ones.
+@MainActor
 final class MenuBarController: NSObject {
     private var statusItem: NSStatusItem!
     private var statusMenu: NSMenu!
@@ -96,7 +97,12 @@ final class MenuBarController: NSObject {
     }
 
     deinit {
-        removeAllMonitors()
+        let keyDownMonitor = keyDownMonitor
+        let flagsMonitor = flagsMonitor
+        Task { @MainActor in
+            if let keyDownMonitor { NSEvent.removeMonitor(keyDownMonitor) }
+            if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
+        }
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -132,8 +138,21 @@ final class MenuBarController: NSObject {
     /// saved) all global monitors are torn down.  Otherwise a fresh pair of
     /// event monitors is installed.
     private func registerSavedShortcut() {
-        let keyCode = UInt32(UserDefaults.standard.integer(forKey: shortcutKeyCodeKey))
-        let modifiers = UInt32(UserDefaults.standard.integer(forKey: shortcutModifiersKey))
+        let storedKeyCode = UserDefaults.standard.integer(forKey: shortcutKeyCodeKey)
+        let storedModifiers = UserDefaults.standard.integer(forKey: shortcutModifiersKey)
+        guard let keyCode = UInt32(exactly: storedKeyCode),
+              let modifiers = UInt32(exactly: storedModifiers)
+        else {
+            // Imported or manually edited preferences must never turn into a
+            // trapping integer conversion at launch. Clear the invalid pair
+            // rather than registering a shortcut with unrelated bit patterns.
+            UserDefaults.standard.removeObject(forKey: shortcutKeyCodeKey)
+            UserDefaults.standard.removeObject(forKey: shortcutModifiersKey)
+            removeAllMonitors()
+            activeKeyCode = 0
+            activeModifiers = 0
+            return
+        }
 
         // Skip if nothing changed (avoids churn from didChangeNotification).
         guard keyCode != activeKeyCode || modifiers != activeModifiers else { return }
@@ -158,7 +177,9 @@ final class MenuBarController: NSObject {
             let effective = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             guard effective.rawValue == modifiers else { return }
             guard UInt32(event.keyCode) == keyCode else { return }
-            self?.requestToggle()
+            Task { @MainActor [weak self] in
+                self?.requestToggle()
+            }
         }
     }
 

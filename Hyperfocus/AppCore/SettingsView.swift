@@ -16,6 +16,20 @@ struct DisplaySetting: Codable, Identifiable, Equatable {
     var customOpacity: Double?
 }
 
+/// Canonicalizes imported display settings before they touch SwiftUI state.
+/// `Dictionary(uniqueKeysWithValues:)` traps on duplicate keys, so an import
+/// must collapse duplicates even when it originated from a hand-edited file.
+private func normalizedDisplaySettings(_ settings: [DisplaySetting]) -> [DisplaySetting] {
+    var unique: [String: DisplaySetting] = [:]
+    for var setting in settings where !setting.id.isEmpty {
+        if let opacity = setting.customOpacity {
+            setting.customOpacity = opacity.isFinite ? min(max(opacity, 0), 1) : nil
+        }
+        unique[setting.id] = setting
+    }
+    return unique.values.sorted { $0.id < $1.id }
+}
+
 struct HyperfocusSettings: Codable {
     /// Legacy pre-filter Deep blur setting, retained in exports for downgrade.
     var blurRadius: Double
@@ -37,38 +51,67 @@ extension HyperfocusSettings {
     static func current() -> HyperfocusSettings {
         let defaults = UserDefaults.standard
         return HyperfocusSettings(
-            blurRadius: defaults.object(forKey: "blurRadius") as? Double ?? 20,
-            saturation: defaults.object(forKey: "saturation") as? Double ?? 0,
-            deepBlurRadius: defaults.object(forKey: DeepSettings.deepBlurRadiusKey) as? Double,
+            blurRadius: DeepSettings.sanitizedBlurRadius(
+                defaults.object(forKey: "blurRadius") as? Double ?? DeepSettings.defaultBlurRadius
+            ),
+            saturation: DeepSettings.sanitizedSaturation(
+                defaults.object(forKey: "saturation") as? Double ?? 0
+            ),
+            deepBlurRadius: (defaults.object(forKey: DeepSettings.deepBlurRadiusKey) as? Double)
+                .map { DeepSettings.sanitizedBlurRadius($0) },
             deepFilterID: defaults.string(forKey: DeepSettings.filterIDKey),
             temporalMode: defaults.string(forKey: DeepSettings.temporalModeKey),
-            filterOverrides: defaults.data(forKey: DeepSettings.overridesKey),
+            filterOverrides: DeepSettings.sanitizedCustomFilterData(
+                defaults.data(forKey: DeepSettings.overridesKey)
+            ),
             tintColorData: defaults.data(forKey: "tintColorData"),
             launchAtLogin: defaults.bool(forKey: "launchAtLogin"),
             focusMode: defaults.string(forKey: "hyperfocusMode"),
-            blurFPS: defaults.integer(forKey: "blurFPS"),
+            blurFPS: DeepSettings.sanitizedFramesPerSecond(defaults.integer(forKey: "blurFPS")),
             excludedApps: (try? JSONDecoder().decode([String].self, from: defaults.data(forKey: "excludedApps") ?? Data())) ?? [],
             appGroups: (try? JSONDecoder().decode([NamedGroup].self, from: defaults.data(forKey: "appGroups") ?? Data())) ?? [],
-            perDisplay: (try? JSONDecoder().decode([DisplaySetting].self, from: defaults.data(forKey: "perDisplaySettings") ?? Data())) ?? []
+            perDisplay: normalizedDisplaySettings(
+                (try? JSONDecoder().decode(
+                    [DisplaySetting].self,
+                    from: defaults.data(forKey: "perDisplaySettings") ?? Data()
+                )) ?? []
+            )
         )
     }
 
     func apply() {
         let defaults = UserDefaults.standard
-        defaults.set(blurRadius, forKey: "blurRadius")
-        defaults.set(saturation, forKey: "saturation")
+        defaults.set(DeepSettings.sanitizedBlurRadius(blurRadius), forKey: "blurRadius")
+        defaults.set(DeepSettings.sanitizedSaturation(saturation), forKey: "saturation")
+
         if let deepFilterID, let deepBlurRadius {
+            let overrides = DeepSettings.sanitizedCustomFilterData(filterOverrides)
+            let filterID: String
+            if deepFilterID == DeepFilter.customID, overrides != nil {
+                filterID = DeepFilter.customID
+            } else if let preset = DeepFilter.withID(deepFilterID) {
+                filterID = preset.id
+            } else {
+                filterID = DeepFilter.deepID
+            }
+
             // Set the values the resolver reads before publishing the filter
             // id, whose KVO observer can trigger a live Deep transition.
-            defaults.set(deepBlurRadius, forKey: DeepSettings.deepBlurRadiusKey)
-            defaults.set(temporalMode ?? TemporalMode.live.rawValue, forKey: DeepSettings.temporalModeKey)
-            if let filterOverrides {
-                defaults.set(filterOverrides, forKey: DeepSettings.overridesKey)
+            defaults.set(
+                DeepSettings.sanitizedBlurRadius(deepBlurRadius),
+                forKey: DeepSettings.deepBlurRadiusKey
+            )
+            defaults.set(
+                TemporalMode(rawValue: temporalMode ?? "")?.rawValue ?? TemporalMode.live.rawValue,
+                forKey: DeepSettings.temporalModeKey
+            )
+            if filterID == DeepFilter.customID, let overrides {
+                defaults.set(overrides, forKey: DeepSettings.overridesKey)
             } else {
                 defaults.removeObject(forKey: DeepSettings.overridesKey)
             }
             defaults.set(true, forKey: DeepSettings.migratedKey)
-            defaults.set(deepFilterID, forKey: DeepSettings.filterIDKey)
+            defaults.set(filterID, forKey: DeepSettings.filterIDKey)
         } else {
             // Importing a pre-filter export deliberately re-runs the legacy
             // migration so its radius and saturation seed a Custom filter.
@@ -78,13 +121,20 @@ extension HyperfocusSettings {
             defaults.removeObject(forKey: DeepSettings.overridesKey)
             defaults.removeObject(forKey: DeepSettings.migratedKey)
         }
+
         defaults.set(tintColorData, forKey: "tintColorData")
         defaults.set(launchAtLogin, forKey: "launchAtLogin")
-        defaults.set(focusMode, forKey: "hyperfocusMode")
-        defaults.set(blurFPS, forKey: "blurFPS")
+        defaults.set(
+            focusMode.flatMap(HyperfocusMode.init(rawValue:))?.rawValue,
+            forKey: "hyperfocusMode"
+        )
+        defaults.set(DeepSettings.sanitizedFramesPerSecond(blurFPS), forKey: "blurFPS")
         defaults.set(try? JSONEncoder().encode(excludedApps), forKey: "excludedApps")
         defaults.set(try? JSONEncoder().encode(appGroups), forKey: "appGroups")
-        defaults.set(try? JSONEncoder().encode(perDisplay), forKey: "perDisplaySettings")
+        defaults.set(
+            try? JSONEncoder().encode(normalizedDisplaySettings(perDisplay)),
+            forKey: "perDisplaySettings"
+        )
     }
 }
 
@@ -222,8 +272,13 @@ struct EffectsTab: View {
     @AppStorage("blurFPS") private var blurFPS: Int = 10
 
     private var customFilter: CustomFilter? {
-        guard let filterOverrides else { return nil }
-        return try? JSONDecoder().decode(CustomFilter.self, from: filterOverrides)
+        guard let filterOverrides,
+              var custom = try? JSONDecoder().decode(CustomFilter.self, from: filterOverrides)
+        else {
+            return nil
+        }
+        custom.parameters = DeepSettings.sanitizedParameters(custom.parameters)
+        return custom
     }
 
     private var activeCustomFilter: CustomFilter? {
@@ -245,7 +300,7 @@ struct EffectsTab: View {
     }
 
     private var effectiveBlurRadius: Double {
-        max(blurRadius, basePreset.minimumBlurRadius)
+        max(DeepSettings.sanitizedBlurRadius(blurRadius), basePreset.minimumBlurRadius)
     }
 
     private var currentTemporalMode: TemporalMode {
@@ -266,7 +321,7 @@ struct EffectsTab: View {
                 if deepFilterID != DeepFilter.customID {
                     forkToCustom()
                 }
-                blurRadius = value
+                blurRadius = DeepSettings.sanitizedBlurRadius(value)
             }
         )
     }
@@ -279,10 +334,17 @@ struct EffectsTab: View {
                     baseID: basePreset.id,
                     parameters: displayedParameters
                 )
-                custom.parameters.saturation = Float(value)
+                custom.parameters.saturation = Float(DeepSettings.sanitizedSaturation(value))
                 custom.parameters.grainSeed = 0
                 saveCustom(custom)
             }
+        )
+    }
+
+    private var studioSaturationBinding: Binding<Double> {
+        Binding(
+            get: { DeepSettings.sanitizedSaturation(saturation) },
+            set: { saturation = DeepSettings.sanitizedSaturation($0) }
         )
     }
 
@@ -319,7 +381,7 @@ struct EffectsTab: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Filter Saturation: \(Int(saturationBinding.wrappedValue * 100))%")
+                Text("Filter Saturation: \(Int(DeepSettings.sanitizedSaturation(saturationBinding.wrappedValue) * 100))%")
                     .font(.body)
                 Slider(value: saturationBinding, in: 0...1, step: 0.05)
                 Text("Adjusting a slider creates a Custom filter without changing the original preset.")
@@ -339,11 +401,11 @@ struct EffectsTab: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Blur Frame Rate: \(blurFPS) FPS")
+                Text("Blur Frame Rate: \(DeepSettings.sanitizedFramesPerSecond(blurFPS)) FPS")
                     .font(.body)
                 Slider(value: Binding(
-                    get: { Double(blurFPS) },
-                    set: { blurFPS = Int($0) }
+                    get: { Double(DeepSettings.sanitizedFramesPerSecond(blurFPS)) },
+                    set: { blurFPS = DeepSettings.sanitizedFramesPerSecond(Int($0)) }
                 ), in: 1...30, step: 1)
                 Text("Lower = less GPU / more battery")
                     .font(.caption)
@@ -351,9 +413,9 @@ struct EffectsTab: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Studio Saturation: \(Int(saturation * 100))%")
+                Text("Studio Saturation: \(Int(studioSaturationBinding.wrappedValue * 100))%")
                     .font(.body)
-                Slider(value: $saturation, in: 0...1, step: 0.05)
+                Slider(value: studioSaturationBinding, in: 0...1, step: 0.05)
                 Text("Used only by the permission-free Studio mode.")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -660,7 +722,10 @@ struct DisplaysTab: View {
         guard let data = perDisplayData,
               let decoded = try? JSONDecoder().decode([DisplaySetting].self, from: data)
         else { return }
-        settings = Dictionary(uniqueKeysWithValues: decoded.map { ($0.id, $0) })
+        settings = Dictionary(
+            normalizedDisplaySettings(decoded).map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
     }
 
     private func save() {

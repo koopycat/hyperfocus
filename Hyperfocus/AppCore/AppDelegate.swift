@@ -2,6 +2,7 @@ import Cocoa
 import ServiceManagement
 import SwiftUI
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarController: MenuBarController?
     private var displayManager: DisplayManager?
@@ -431,7 +432,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showFocusPresentation() {
         let frame = activeWindowTracker?.currentFrontmostWindowFrame
         let studioDim = studioDimColor
-        let studioSaturation = UserDefaults.standard.object(forKey: "saturation") as? Double ?? 0.0
+        let studioSaturation = DeepSettings.sanitizedSaturation(
+            UserDefaults.standard.object(forKey: "saturation") as? Double ?? 0.0
+        )
 
         let shouldAttachBlurEngine = currentMode == .deep && !hasAttachedBlurEngine
         var attachedBlurEngine = false

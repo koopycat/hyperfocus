@@ -272,6 +272,78 @@ enum DeepSettings {
     static let legacyBlurRadiusKey = "blurRadius"
     static let legacySaturationKey = "saturation"
     static let defaultBlurRadius: Double = 20
+    static let maximumBlurRadius: Double = 48
+    static let defaultFramesPerSecond = 10
+
+    /// Normalizes persisted or imported blur values before they reach the UI
+    /// or MPS. A non-finite value falls back to the product default; finite
+    /// values retain their intent within the slider's supported range.
+    static func sanitizedBlurRadius(_ value: Double) -> Double {
+        guard value.isFinite else { return defaultBlurRadius }
+        return min(max(value, 0), maximumBlurRadius)
+    }
+
+    /// Studio and Custom-filter saturation are both represented as a unit
+    /// interval. Keeping this check centralized prevents imported settings
+    /// from causing a trapping `Int` conversion in the Settings UI.
+    static func sanitizedSaturation(_ value: Double) -> Double {
+        guard value.isFinite else { return 0 }
+        return min(max(value, 0), 1)
+    }
+
+    /// `0` historically means an unset frame-rate preference, so preserve its
+    /// established default rather than treating it as one frame per second.
+    static func sanitizedFramesPerSecond(_ value: Int) -> Int {
+        guard value > 0 else { return defaultFramesPerSecond }
+        return min(value, 30)
+    }
+
+    /// Imported Custom payloads are untrusted data. The shipped UI currently
+    /// exposes only saturation, but every shader uniform is normalized here so
+    /// malformed JSON cannot introduce NaN, infinity, or unstable extremes.
+    static func sanitizedParameters(_ parameters: FilterParameters) -> FilterParameters {
+        func bounded(_ value: Float, _ range: ClosedRange<Float>, fallback: Float) -> Float {
+            guard value.isFinite else { return fallback }
+            return min(max(value, range.lowerBound), range.upperBound)
+        }
+        func color(_ value: SIMD3<Float>, fallback: SIMD3<Float>) -> SIMD3<Float> {
+            SIMD3(
+                bounded(value.x, 0...1, fallback: fallback.x),
+                bounded(value.y, 0...1, fallback: fallback.y),
+                bounded(value.z, 0...1, fallback: fallback.z)
+            )
+        }
+
+        var result = parameters
+        result.saturation = bounded(result.saturation, 0...1, fallback: 0)
+        result.exposure = bounded(result.exposure, -2...2, fallback: 0)
+        result.blackPoint = bounded(result.blackPoint, 0...0.95, fallback: 0)
+        result.contrast = bounded(result.contrast, 0.1...2, fallback: 1)
+        result.tintColor = color(result.tintColor, fallback: .zero)
+        result.tintOpacity = bounded(result.tintOpacity, 0...1, fallback: 0)
+        result.duotoneA = color(result.duotoneA, fallback: .zero)
+        result.duotoneB = color(result.duotoneB, fallback: .one)
+        result.duotoneAmount = bounded(result.duotoneAmount, 0...1, fallback: 0)
+        result.vignetteStrength = bounded(result.vignetteStrength, 0...1, fallback: 0)
+        result.vignetteFeather = bounded(result.vignetteFeather, 0.05...1, fallback: 0.5)
+        result.grainAmount = bounded(result.grainAmount, 0...1, fallback: 0)
+        result.grainSeed = 0
+        result.bloomAmount = bounded(result.bloomAmount, 0...1, fallback: 0)
+        return result
+    }
+
+    /// Decodes, validates, and re-encodes a persisted Custom override. Invalid
+    /// payloads intentionally become nil, which makes the resolver use Deep.
+    static func sanitizedCustomFilterData(_ data: Data?) -> Data? {
+        guard let data,
+              var custom = try? JSONDecoder().decode(CustomFilter.self, from: data),
+              DeepFilter.withID(custom.baseID) != nil
+        else {
+            return nil
+        }
+        custom.parameters = sanitizedParameters(custom.parameters)
+        return try? JSONEncoder().encode(custom)
+    }
 
     /// One-time migration: copy the old shared blur-radius and saturation
     /// values into Deep-specific state. Either nondefault legacy override
@@ -281,8 +353,12 @@ enum DeepSettings {
     static func migrateIfNeeded(_ defaults: UserDefaults = .standard) {
         guard !defaults.bool(forKey: migratedKey) else { return }
 
-        let legacyRadius = defaults.object(forKey: legacyBlurRadiusKey) as? Double ?? defaultBlurRadius
-        let legacySaturation = defaults.object(forKey: legacySaturationKey) as? Double ?? 0.0
+        let legacyRadius = sanitizedBlurRadius(
+            defaults.object(forKey: legacyBlurRadiusKey) as? Double ?? defaultBlurRadius
+        )
+        let legacySaturation = sanitizedSaturation(
+            defaults.object(forKey: legacySaturationKey) as? Double ?? 0.0
+        )
         defaults.set(legacyRadius, forKey: deepBlurRadiusKey)
         defaults.set(TemporalMode.live.rawValue, forKey: temporalModeKey)
 
@@ -310,7 +386,9 @@ enum DeepSettings {
     static func resolve(_ defaults: UserDefaults = .standard) -> ResolvedDeepSettings {
         migrateIfNeeded(defaults)
 
-        let userRadius = defaults.object(forKey: deepBlurRadiusKey) as? Double ?? defaultBlurRadius
+        let userRadius = sanitizedBlurRadius(
+            defaults.object(forKey: deepBlurRadiusKey) as? Double ?? defaultBlurRadius
+        )
         let mode = TemporalMode(rawValue: defaults.string(forKey: temporalModeKey) ?? "") ?? .live
         let id = defaults.string(forKey: filterIDKey) ?? DeepFilter.deepID
 
@@ -321,7 +399,7 @@ enum DeepSettings {
             return ResolvedDeepSettings(
                 filterID: customID,
                 blurRadius: max(userRadius, base.minimumBlurRadius),
-                parameters: custom.parameters,
+                parameters: sanitizedParameters(custom.parameters),
                 temporalMode: mode,
                 isCustom: true
             )

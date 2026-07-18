@@ -3,12 +3,20 @@ import ScreenCaptureKit
 import Metal
 import QuartzCore
 
+private struct LiveRenderInput: @unchecked Sendable {
+    /// ScreenCaptureKit owns the IOSurface-backed buffer until the renderer
+    /// completes, and CAMetalLayer is used only for nextDrawable/present on
+    /// the render queue. The wrapper documents that intentional handoff.
+    let pixelBuffer: CVPixelBuffer
+    let metalLayer: CAMetalLayer
+}
+
 /// Single rendering engine for Hyperfocus.
 ///
 /// Captures each display at quarter resolution via ScreenCaptureKit, runs the
 /// frames through `MetalBlurRenderer` (MPS 2D Gaussian blur + parameterized
 /// post-processing), and composites the result directly into the overlay's
-/// `CAMetalLayer` -- no CPU readback.  Core Animation enlarges the
+/// `CAMetalLayer` -- no CPU readback. Core Animation enlarges the
 /// low-resolution result from the drawable while compositing, avoiding a
 /// full-display render pass.
 /// Each overlay's own window is excluded from capture to prevent feedback flicker.
@@ -34,9 +42,9 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// never written (fresh install), so map 0 to the default instead of
     /// clamping to 1 FPS.
     private var framesPerSecond: Int32 {
-        let raw = UserDefaults.standard.integer(forKey: "blurFPS")
-        let effective = raw == 0 ? 10 : raw
-        return Int32(min(max(effective, 1), 30))
+        Int32(DeepSettings.sanitizedFramesPerSecond(
+            UserDefaults.standard.integer(forKey: "blurFPS")
+        ))
     }
 
     private let captureScale: CGFloat = 4
@@ -143,6 +151,16 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 
     @objc private func thermalOrPowerStateChanged() {
+        // ProcessInfo posts this notification from a worker queue. The
+        // resulting session restart creates and orders AppKit windows, so both
+        // state comparison and notification delivery must happen on main.
+        DispatchQueue.main.async { [weak self] in
+            self?.applyThermalOrPowerStateChange()
+        }
+    }
+
+    private func applyThermalOrPowerStateChange() {
+        dispatchPrecondition(condition: .onQueue(.main))
         let newFPS = effectiveFramesPerSecond
         guard newFPS != lastEffectiveFramesPerSecond else { return }
         lastEffectiveFramesPerSecond = newFPS
@@ -155,6 +173,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     // MARK: - Lifecycle
 
+    @MainActor
     func attach(to overlay: OverlayWindowController, displayID: CGDirectDisplayID) {
         NSLog("[Hyperfocus] attach display \(displayID)")
         displayOverlays[displayID] = overlay
@@ -172,9 +191,9 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         }
 
         let generation = captureGeneration
-        Task { [weak self] in
-            guard let self,
-                  await self.requestPermissionIfNeeded(),
+        Task { @MainActor [weak self] in
+            guard let self, self.captureGeneration == generation else { return }
+            guard await self.requestPermissionIfNeeded(for: generation),
                   self.captureGeneration == generation
             else { return }
 
@@ -186,7 +205,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             guard self.captureGeneration == generation else { return }
             guard let content = content, !content.displays.isEmpty else {
                 NSLog("[Hyperfocus] Shareable content empty after permission grant for display \(displayID)")
-                await self.presentPermissionDeniedAlert()
+                self.presentPermissionDeniedAlert()
                 return
             }
 
@@ -212,6 +231,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// The Metal renderer compares these values against the visible frame and
     /// forces exactly one redraw when a filter, parameter, or temporal mode
     /// changes, including while Frozen mode is active.
+    @MainActor
     @discardableResult
     func updateFilter(
         filterID: String,
@@ -234,10 +254,12 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// Suspends or resumes GPU rendering for all displays. Capture streams
     /// keep running (cheap, and resume is instant); only the Metal render and
     /// drawable present are skipped.
+    @MainActor
     func setRenderingPaused(_ paused: Bool) {
         renderingPaused = paused
     }
 
+    @MainActor
     func detach(from displayID: CGDirectDisplayID) {
         let stream = streams.removeValue(forKey: displayID)
         displayOverlays.removeValue(forKey: displayID)
@@ -248,6 +270,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         }
     }
 
+    @MainActor
     func detachAll() {
         captureGeneration &+= 1
         let streamsToStop = Array(streams.values)
@@ -278,16 +301,19 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// state via `SCShareableContent.current` (no prompt) so a user who grants
     /// permission in System Settings while Hyperfocus is running can use Deep
     /// mode without relaunching. Only the granted state is cached.
-    func requestPermissionIfNeeded() async -> Bool {
+    @MainActor
+    private func requestPermissionIfNeeded(for generation: UInt) async -> Bool {
+        guard captureGeneration == generation else { return false }
         if screenCapturePermissionGranted {
             NSLog("[Hyperfocus] SC permission: cached granted")
             return true
         }
 
-        let granted = await resolvePermission()
+        let granted = await resolvePermission(for: generation)
+        guard captureGeneration == generation else { return false }
         screenCapturePermissionGranted = granted
         NSLog("[Hyperfocus] SC permission resolved this session: \(granted ? "GRANTED" : "DENIED")")
-        if !granted { await presentPermissionDeniedAlert() }
+        if !granted { presentPermissionDeniedAlert() }
         return granted
     }
 
@@ -298,27 +324,31 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// prompted and denied, subsequent calls return immediately after the
     /// prompt-free check, so granting permission in System Settings is picked
     /// up on the next toggle without a relaunch.
-    private func resolvePermission() async -> Bool {
+    @MainActor
+    private func resolvePermission(for generation: UInt) async -> Bool {
         let hasPromptedKey = "SCScreenCapturePermissionPrompted"
+        guard captureGeneration == generation else { return false }
 
         // SCShareableContent is the authoritative, prompt-free check.
         // Re-check every time so a mid-session Settings grant is honored.
         if let granted = await checkShareableContent(), granted {
-            return true
+            return captureGeneration == generation
         }
+        guard captureGeneration == generation else { return false }
 
         // First failure: if we've never prompted before, ask once.
         if !UserDefaults.standard.bool(forKey: hasPromptedKey) {
             UserDefaults.standard.set(true, forKey: hasPromptedKey)
             let requested = CGRequestScreenCaptureAccess()
             NSLog("[Hyperfocus] SC one-time request result: \(requested)")
-            if requested { return true }
+            if requested { return captureGeneration == generation }
             // The prompt was shown but the user may still be deciding, or the
             // TCC database has not updated yet. Give it a short moment and
             // re-check once.
             try? await Task.sleep(nanoseconds: 500_000_000)
+            guard captureGeneration == generation else { return false }
             if let granted = await checkShareableContent() {
-                return granted
+                return granted && captureGeneration == generation
             }
         }
 
@@ -372,6 +402,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     ///
     /// - Parameter content: Optional pre-fetched shareable content so the
     ///   activation path does not fetch it twice.
+    @MainActor
     private func captureStillScreenshot(
         for displayID: CGDirectDisplayID,
         overlay: OverlayWindowController,
@@ -438,6 +469,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     /// Fallback for macOS < 14.0: spin up a transient SCStream, take its
     /// first frame, tear it down. The stream is not added to `self.streams`.
+    @MainActor
     private func captureStillFrameFallback(
         filter: SCContentFilter,
         configuration: SCStreamConfiguration
@@ -458,6 +490,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     // MARK: - Capture Management
 
+    @MainActor
     private func startCapture(
         for displayID: CGDirectDisplayID,
         overlay: OverlayWindowController,
@@ -507,11 +540,15 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
                 return
             }
         } catch {
+            guard captureGeneration == generation else {
+                try? await streamToStart?.stopCapture()
+                return
+            }
             if let streamToStart, streams[displayID] === streamToStart {
                 streams.removeValue(forKey: displayID)
             }
             NSLog("[Hyperfocus] Failed to start capture for display \(displayID): \(error)")
-            await self.presentStreamFailureAlert(displayID: displayID, error: error)
+            self.presentStreamFailureAlert(displayID: displayID, error: error)
         }
     }
 
@@ -606,6 +643,7 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 
     /// Must run on the main queue.
+    @MainActor
     private func scheduleLiveFrame(_ pixelBuffer: CVPixelBuffer, from stream: SCStream) {
         guard !renderingPaused,
               let displayID = streams.first(where: { $0.value === stream })?.key,
@@ -635,14 +673,15 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             return
         }
 
-        renderQueue.async { [weak self] in
+        let renderInput = LiveRenderInput(pixelBuffer: pixelBuffer, metalLayer: metalLayer)
+        renderQueue.async { [weak self, renderInput] in
             renderer.processFrame(
-                pixelBuffer: pixelBuffer,
+                pixelBuffer: renderInput.pixelBuffer,
                 blurRadius: renderRadius,
                 filterID: renderFilterID,
                 parameters: frameParameters,
                 temporalMode: renderTemporalMode,
-                metalLayer: metalLayer,
+                metalLayer: renderInput.metalLayer,
                 cacheKey: cacheKey,
                 skipRect: skipRect,
                 completion: { result in
