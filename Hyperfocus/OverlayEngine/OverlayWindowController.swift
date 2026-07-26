@@ -5,8 +5,11 @@ import Metal
 
 /// One borderless overlay window per display.
 ///
-/// The window covers the whole screen at level 19 (below Dock=20 and menu
-/// bar=24).  Its content layer holds the blurred desktop image.  A
+/// The window covers the whole screen at the menu-bar level. This is
+/// deliberate: macOS presentation options belong to the active foreground
+/// application, so an accessory app cannot keep another application's menu
+/// bar hidden. Covering that layer makes focus mode independent of which app
+/// owns the menu bar. Its content layer holds the blurred desktop image. A
 /// `CAShapeLayer` mask carves a rounded-rect hole over the active window so
 /// the sharp, live window shows through the gap.
 ///
@@ -86,7 +89,11 @@ final class OverlayWindowController {
         w.isOpaque = false
         w.hasShadow = false
         w.backgroundColor = .clear
-        w.level = NSWindow.Level(rawValue: 19)
+        // NSWindow.Level.statusBar (25) is one level above the menu bar.
+        // `.mainMenu` (24) only ties the system layer, and macOS can composite
+        // the real menu bar above it depending on window ordering. The overlay
+        // remains click-through, and its cutout keeps the focused window sharp.
+        w.level = .statusBar
         w.ignoresMouseEvents = true
         w.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         w.sharingType = .none

@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isFocusActive = false
     private var isHiddenForExclusion = false
     private var hasAttachedBlurEngine = false
+    private var presentationOptionsBeforeFocus: NSApplication.PresentationOptions?
+    private var displayReconfigurationGeneration: UInt = 0
 
     /// Coordinates the two halves of a named-filter transition. The token
     /// discards stale fade-out completions when the user changes filters
@@ -40,6 +42,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var currentMode: HyperfocusMode {
         return selectedMode
+    }
+
+    private func enableFocusPresentationOptions() {
+        if presentationOptionsBeforeFocus == nil {
+            presentationOptionsBeforeFocus = NSApp.presentationOptions
+        }
+        guard let previousOptions = presentationOptionsBeforeFocus else { return }
+        NSApp.presentationOptions = previousOptions.union([.hideMenuBar, .hideDock])
+    }
+
+    private func restorePresentationOptions() {
+        guard let previousOptions = presentationOptionsBeforeFocus else { return }
+        NSApp.presentationOptions = previousOptions
+        presentationOptionsBeforeFocus = nil
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -160,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mouseTracker?.stop()
         activeWindowTracker?.stop()
         blurEngine?.detachAll()
+        restorePresentationOptions()
 
         NotificationCenter.default.removeObserver(self)
         UserDefaults.standard.removeObserver(self, forKeyPath: "launchAtLogin")
@@ -182,10 +199,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menuBarController?.setFocusActive(false)
             return
         }
+        displayReconfigurationGeneration &+= 1
         if active { activateFocus() } else { deactivateFocus() }
     }
 
     private func activateFocus() {
+        enableFocusPresentationOptions()
         isFocusActive = true
         isHiddenForExclusion = false
         displayManager?.configureForAllScreens()
@@ -215,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         blurEngine?.setRenderingPaused(false)
         hasAttachedBlurEngine = false
         for overlay in displayManager?.allOverlays() ?? [] { overlay.hide() }
+        restorePresentationOptions()
         menuBarController?.setFocusActive(false)
     }
 
@@ -247,8 +267,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeWindowTracker?.stopFrameTracking()
         blurEngine?.detachAll()
         displayManager?.removeAllOverlays()
+        displayReconfigurationGeneration &+= 1
+        let generation = displayReconfigurationGeneration
         DispatchQueue.main.async { [weak self] in
-            self?.activateFocus()
+            guard let self, self.displayReconfigurationGeneration == generation else { return }
+            self.activateFocus()
         }
     }
 
