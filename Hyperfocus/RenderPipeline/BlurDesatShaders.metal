@@ -143,9 +143,12 @@ kernel void bloomThreshold(
 /// cheap hash that lets us skip unchanged frames saves nearly all steady-state
 /// GPU work.
 ///
-/// Dispatched as a single threadgroup of kHashThreads threads; each thread
-/// folds a strided subset of pixels into an accumulator, then a tree
-/// reduction merges the partials into out[0].
+/// The frame is divided into fixed-size tiles (kTileSize x kTileSize samples;
+/// each sample covers a 2x2 pixel cell, so a tile covers 64x64 capture
+/// pixels). Each thread folds one tile into a 64-bit FNV accumulator and
+/// writes it to tiles[tileIndex]. The host compares tile hashes against the
+/// previous frame, which yields both a change verdict and a change magnitude
+/// (tile count) so Live mode can ignore sub-tile micro-changes.
 ///
 /// The quantization from unorm float back to 8-bit is not perfectly exact,
 /// but it is fully deterministic -- identical input always produces the same
@@ -154,17 +157,21 @@ kernel void bloomThreshold(
 /// skipRect: (x, y, width, height) in pixels; width == 0 disables skipping.
 constant uint kHashThreads = 256;
 constant uint kSampleStride = 2;
+constant uint kTileSize = 32;   // tile edge in samples = 64 capture pixels
 
 kernel void frameHash(
     texture2d<float, access::read> src      [[texture(0)]],
-    device uint64_t*               out      [[buffer(0)]],
+    device uint64_t*               tiles    [[buffer(0)]],
     constant uint4&                skipRect [[buffer(1)]],
     uint tid [[thread_index_in_threadgroup]])
 {
     const uint width = src.get_width();
     const uint height = src.get_height();
     const uint samplesPerRow = (width + kSampleStride - 1) / kSampleStride;
-    const uint totalSamples = samplesPerRow * ((height + kSampleStride - 1) / kSampleStride);
+    const uint sampleRows    = (height + kSampleStride - 1) / kSampleStride;
+    const uint tilesX = (samplesPerRow + kTileSize - 1) / kTileSize;
+    const uint tilesY = (sampleRows  + kTileSize - 1) / kTileSize;
+    const uint totalTiles = tilesX * tilesY;
 
     const uint skipX = skipRect.x;
     const uint skipY = skipRect.y;
@@ -172,40 +179,33 @@ kernel void frameHash(
     const uint skipMaxY = skipRect.y + skipRect.w;
     const bool skipEnabled = skipRect.z > 0;
 
-    uint64_t acc = 1469598103934665603ull; // FNV offset basis
+    for (uint tile = tid; tile < totalTiles; tile += kHashThreads) {
+        const uint tx = tile % tilesX;
+        const uint ty = tile / tilesX;
+        const uint xStart = tx * kTileSize;
+        const uint yStart = ty * kTileSize;
+        const uint xEnd = min(xStart + kTileSize, samplesPerRow);
+        const uint yEnd = min(yStart + kTileSize, sampleRows);
 
-    for (uint i = tid; i < totalSamples; i += kHashThreads) {
-        uint x = (i % samplesPerRow) * kSampleStride;
-        uint y = (i / samplesPerRow) * kSampleStride;
+        uint64_t acc = 1469598103934665603ull; // FNV offset basis
+        for (uint sy = yStart; sy < yEnd; sy++) {
+            for (uint sx = xStart; sx < xEnd; sx++) {
+                const uint x = sx * kSampleStride;
+                const uint y = sy * kSampleStride;
 
-        if (skipEnabled && x >= skipX && x < skipMaxX && y >= skipY && y < skipMaxY) {
-            continue;
+                if (skipEnabled && x >= skipX && x < skipMaxX && y >= skipY && y < skipMaxY) {
+                    continue;
+                }
+
+                float4 c = src.read(uint2(x, y));
+                uint r = uint(saturate(c.r) * 255.0);
+                uint g = uint(saturate(c.g) * 255.0);
+                uint b = uint(saturate(c.b) * 255.0);
+                uint64_t packed = uint64_t((r << 16) | (g << 8) | b);
+
+                acc = (acc ^ packed) * 1099511628211ull; // FNV prime
+            }
         }
-
-        float4 c = src.read(uint2(x, y));
-        uint r = uint(saturate(c.r) * 255.0);
-        uint g = uint(saturate(c.g) * 255.0);
-        uint b = uint(saturate(c.b) * 255.0);
-        uint64_t packed = uint64_t((r << 16) | (g << 8) | b);
-
-        acc = (acc ^ packed) * 1099511628211ull; // FNV prime
-    }
-
-    // Tree reduction across the threadgroup.
-    threadgroup uint64_t partial[kHashThreads];
-    partial[tid] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    for (uint offset = kHashThreads / 2; offset > 0; offset >>= 1) {
-        if (tid < offset) {
-            // XOR keeps the reduction order-independent (unlike +, no carry
-            // concerns) and is plenty for change detection.
-            partial[tid] = partial[tid] * 1099511628211ull + partial[tid + offset];
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-
-    if (tid == 0) {
-        out[0] = partial[0];
+        tiles[tile] = acc;
     }
 }

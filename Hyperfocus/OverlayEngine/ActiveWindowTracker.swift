@@ -38,6 +38,16 @@ final class ActiveWindowTracker {
     private var dragSettleTimer: Timer?
     private(set) var isDragging = false
 
+    /// Adaptive polling for the permission-free fallback. `CGWindowListCopy-
+    /// WindowInfo` is full WindowServer IPC over every on-screen window, so
+    /// the fallback only polls fast while a change is plausibly in progress
+    /// (a drag) and idles down otherwise.
+    private static let fallbackFastInterval: TimeInterval = 1.0 / 30.0
+    private static let fallbackSlowInterval: TimeInterval = 1.0 / 4.0
+    /// How long after the last detected frame change fast polling continues.
+    private static let fallbackFastHold: TimeInterval = 1.5
+    private var lastFrameChangeAt: CFAbsoluteTime = 0
+
     private struct Observation {
         var observer: AXObserver
         var pid: pid_t
@@ -116,11 +126,35 @@ final class ActiveWindowTracker {
     /// without requesting any permission.
     func startFrameTracking() {
         guard axTrusted != true, fallbackFrameTimer == nil else { return }
-
+        lastFrameChangeAt = CFAbsoluteTimeGetCurrent()
         let timer = Timer(
-            timeInterval: 1.0 / 30.0,
+            timeInterval: Self.fallbackFastInterval,
             target: self,
-            selector: #selector(refreshFrontmostWindow),
+            selector: #selector(fallbackPollTick),
+            userInfo: nil,
+            repeats: true
+        )
+        RunLoop.main.add(timer, forMode: .common)
+        fallbackFrameTimer = timer
+    }
+
+    /// Timer callback for the permission-free fallback. Polls fast right
+    /// after a detected change, then decays to the slow steady-state rate
+    /// until something changes again (which reschedules to fast).
+    @objc private func fallbackPollTick() {
+        if fallbackFrameTimer?.timeInterval == Self.fallbackFastInterval,
+           CFAbsoluteTimeGetCurrent() - lastFrameChangeAt > Self.fallbackFastHold {
+            rescheduleFallbackPolling(interval: Self.fallbackSlowInterval)
+        }
+        refreshFrontmostWindow()
+    }
+
+    private func rescheduleFallbackPolling(interval: TimeInterval) {
+        fallbackFrameTimer?.invalidate()
+        let timer = Timer(
+            timeInterval: interval,
+            target: self,
+            selector: #selector(fallbackPollTick),
             userInfo: nil,
             repeats: true
         )
@@ -286,6 +320,12 @@ final class ActiveWindowTracker {
     private func setFrontmostWindowFrame(_ frame: CGRect?) {
         guard frontmostWindowFrame != frame else { return }
         frontmostWindowFrame = frame
+        lastFrameChangeAt = CFAbsoluteTimeGetCurrent()
+        // A real change means a drag may be starting: return the fallback to
+        // fast polling so the cutout keeps up (if it had decayed to slow).
+        if let timer = fallbackFrameTimer, timer.timeInterval != Self.fallbackFastInterval {
+            rescheduleFallbackPolling(interval: Self.fallbackFastInterval)
+        }
         onWindowFrameChanged?(frame)
 
         // Every frame change restarts the settle timer. The first change

@@ -326,6 +326,15 @@ final class OverlayWindowController {
         return CGWindowID(w.windowNumber)
     }
 
+    /// The display this overlay covers, used by the display-reconfiguration
+    /// diff to skip the session rebuild when nothing actually changed.
+    var displayID: CGDirectDisplayID { screen.displayID }
+
+    /// The frame (AppKit points) this overlay was configured for. A stale
+    /// `NSScreen` snapshot after a resolution/arrangement change is exactly
+    /// what lets AppDelegate detect a real topology change.
+    var configuredFrame: CGRect { screen.frame }
+
     // MARK: - Visibility
 
     /// The visibility transition is intentionally long enough to register as
@@ -420,5 +429,15 @@ final class OverlayWindowController {
 
     func orderOut() {
         window?.orderOut(nil)
+    }
+}
+
+/// The `NSScreenNumber` device-description key is the display's CGDirectDisplayID.
+/// Defined here (not in DisplayManager.swift) so the renderer harness, which
+/// compiles this file standalone, also gets the mapping.
+extension NSScreen {
+    var displayID: CGDirectDisplayID {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        return deviceDescription[key] as? CGDirectDisplayID ?? 0
     }
 }

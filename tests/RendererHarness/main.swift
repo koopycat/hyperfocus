@@ -446,26 +446,32 @@ check("Deep cutout-only change skipped", stats.rendered == 1 && stats.skipped ==
 let frameC = makePixelBuffer { _, _ in 128 }!
 _ = withModifiedRegion(frameC, rect: CGRect(x: 300, y: 200, width: 8, height: 8), value: 200)
 submit(frameC, key: key, parameters: deep.parameters)
-stats = waitForStats(rendered: 2, skipped: 2)
-check("background change rendered", stats.rendered == 2 && stats.skipped == 2)
+stats = waitForStats(rendered: 1, skipped: 3)
+check("single-tile micro change skipped (Live magnitude gate)", stats.rendered == 1 && stats.skipped == 3)
 
-submit(frameC, key: key, parameters: deep.parameters, blurRadius: 9)
-stats = waitForStats(rendered: 3, skipped: 2)
-check("blur setting change forces render", stats.rendered == 3 && stats.skipped == 2)
+let frameD = makePixelBuffer { _, _ in 128 }!
+_ = withModifiedRegion(frameD, rect: CGRect(x: 300, y: 200, width: 200, height: 120), value: 200)
+submit(frameD, key: key, parameters: deep.parameters)
+stats = waitForStats(rendered: 2, skipped: 3)
+check("background change rendered", stats.rendered == 2 && stats.skipped == 3)
+
+submit(frameD, key: key, parameters: deep.parameters, blurRadius: 9)
+stats = waitForStats(rendered: 3, skipped: 3)
+check("blur setting change forces render", stats.rendered == 3 && stats.skipped == 3)
 
 renderer.clearFrameState(cacheKey: key)
 Thread.sleep(forTimeInterval: 0.1)
-submit(frameC, key: key, parameters: deep.parameters, blurRadius: 9)
-stats = waitForStats(rendered: 4, skipped: 2)
-check("clearFrameState forces render", stats.rendered == 4 && stats.skipped == 2)
+submit(frameD, key: key, parameters: deep.parameters, blurRadius: 9)
+stats = waitForStats(rendered: 4, skipped: 3)
+check("clearFrameState forces render", stats.rendered == 4 && stats.skipped == 3)
 
 for _ in 0..<50 {
-    submit(frameC, key: key, parameters: deep.parameters, blurRadius: 9)
+    submit(frameD, key: key, parameters: deep.parameters, blurRadius: 9)
 }
-stats = waitForStats(rendered: 4, skipped: 52)
+stats = waitForStats(rendered: 4, skipped: 53)
 check(
     "steady-state burst fully skipped (rendered=\(stats.rendered), skipped=\(stats.skipped))",
-    stats.rendered == 4 && stats.skipped == 52
+    stats.rendered == 4 && stats.skipped == 53
 )
 
 // Accessibility or display changes can briefly yield invalid window geometry.

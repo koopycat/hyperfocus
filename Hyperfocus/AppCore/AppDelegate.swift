@@ -16,6 +16,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hasAttachedBlurEngine = false
     private var presentationOptionsBeforeFocus: NSApplication.PresentationOptions?
     private var displayReconfigurationGeneration: UInt = 0
+    /// Coalesces the display-change rebuild. Both the system notification and
+    /// the CGDisplay reconfiguration callback fire for the same physical event
+    /// (and macOS may post duplicates during sleep/wake), so without this the
+    /// full session teardown + rebuild ran twice per hot-plug.
+    private var displayReconfigWorkItem: DispatchWorkItem?
+
+    /// Identity of a display in the reconfiguration diff: ID plus its frame,
+    /// so resolution and arrangement changes are not mistaken for no-ops.
+    private static func displayTopologyKey(id: CGDirectDisplayID, frame: CGRect) -> String {
+        "\(id):\(Int(frame.minX)):\(Int(frame.minY)):\(Int(frame.width)):\(Int(frame.height))"
+    }
 
     /// Coordinates the two halves of a named-filter transition. The token
     /// discards stale fade-out completions when the user changes filters
@@ -258,9 +269,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func screenParametersChanged() {
+        // Debounce: identical rebuilds from the notification and the CG
+        // callback must collapse into one. The generation guard below already
+        // coalesces the rebuild, but the teardown would still run twice.
+        displayReconfigWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.performDisplayReconfiguration()
+        }
+        displayReconfigWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    }
+
+    private func performDisplayReconfiguration() {
         // Full teardown + rebuild so hot-plugged displays get their own overlay
         // and stream, and removed displays stop capturing.
         guard isFocusActive else { return }
+
+        // Only rebuild when the display topology actually changed (hot-plug,
+        // resolution, arrangement). Toggling focus hides the menu bar and
+        // dock, which re-fires the screen-parameters notification with an
+        // unchanged display set; rebuilding the whole capture session for that
+        // performed a redundant full teardown on every focus activation.
+        let current = Set(NSScreen.screens.map { Self.displayTopologyKey(id: $0.displayID, frame: $0.frame) })
+        let existing = Set((displayManager?.allOverlays() ?? []).map {
+            Self.displayTopologyKey(id: $0.displayID, frame: $0.configuredFrame)
+        })
+        guard current != existing else { return }
+
         cancelDeepFilterTransition()
         isFocusActive = false
         hasAttachedBlurEngine = false
@@ -277,12 +312,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func handleThermalThrottlingChanged(_ notification: Notification) {
         guard isFocusActive, currentMode == .deep else { return }
-        // Restart the Deep-mode session so each stream starts with the new
-        // effective frame rate. Mirrors the blurFPS KVO path.
-        blurEngine?.detachAll()
-        hasAttachedBlurEngine = false
-        deactivateFocus()
-        activateFocus()
+        // Reconfigure the running streams in place; a full session restart
+        // flashed the overlays and re-ran TCC checks for a one-line rate cap.
+        if #available(macOS 13.0, *) {
+            blurEngine?.reconfigureStreamFrameRate()
+        } else {
+            // macOS 12 has no in-place SCStream rate update; rebuild.
+            blurEngine?.detachAll()
+            hasAttachedBlurEngine = false
+            deactivateFocus()
+            activateFocus()
+        }
     }
 
     // MARK: - Settings
@@ -588,12 +628,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activateFocus()
         case "blurFPS":
             guard isFocusActive, currentMode == .deep else { return }
-            // SCStream has no public configuration property for in-place
-            // frame-interval updates. Teardown + rebuild is the safe path.
-            blurEngine?.detachAll()
-            hasAttachedBlurEngine = false
-            deactivateFocus()
-            activateFocus()
+            if #available(macOS 13.0, *) {
+                blurEngine?.reconfigureStreamFrameRate()
+            } else {
+                // macOS 12 has no in-place SCStream rate update; rebuild.
+                blurEngine?.detachAll()
+                hasAttachedBlurEngine = false
+                deactivateFocus()
+                activateFocus()
+            }
         case Self.perDisplaySettingsKey:
             guard isFocusActive else { return }
             // Stream filters are display-specific. Rebuild the active session

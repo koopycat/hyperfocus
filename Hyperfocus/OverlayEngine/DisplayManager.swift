@@ -88,11 +88,4 @@ private func displayReconfigCallback(
     }
 }
 
-// MARK: - NSScreen DisplayID Extension
 
-extension NSScreen {
-    var displayID: CGDirectDisplayID {
-        let key = NSDeviceDescriptionKey("NSScreenNumber")
-        return deviceDescription[key] as? CGDirectDisplayID ?? 0
-    }
-}

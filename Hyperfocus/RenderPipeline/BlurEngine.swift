@@ -89,6 +89,31 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// next toggle without having to relaunch.
     private var screenCapturePermissionGranted = false
 
+    /// The frame rate each running stream was last configured with. Used to
+    /// avoid redundant `updateConfiguration` calls during thermal, FPS-slider,
+    /// and throttle reconciliations.
+    private var streamConfiguredFPS: [CGDirectDisplayID: Int32] = [:]
+
+    /// Displays whose Frozen-mode stream has presented its one live frame and
+    /// can therefore drop to a low keep-alive rate instead of the user FPS.
+    private var frozenThrottledDisplays: Set<CGDirectDisplayID> = []
+
+    /// While true, every stream runs at the throttled keep-alive rate. Set
+    /// only after a pause has persisted past `pauseThrottleDelay`, so quick
+    /// drags keep instant-resume capture while long exclusions save energy.
+    private var pauseThrottleActive = false
+    private var pauseThrottleWorkItem: DispatchWorkItem?
+
+    /// Keep-alive capture rate for throttled streams. High enough that a
+    /// settings change can re-render from a near-fresh frame, low enough that
+    /// dropped frames cost almost nothing.
+    private static let throttledCaptureFPS: Int32 = 2
+    /// How long rendering may stay paused before streams throttle down.
+    private static let pauseThrottleDelay: TimeInterval = 2.0
+    /// Deadline for `SCShareableContent.current`, which is WindowServer/TCC
+    /// IPC known to hang when replayd is wedged.
+    private static let shareableContentTimeout: TimeInterval = 3.0
+
     // Resolved Deep-mode settings, updated live from the UI. `filterID` is
     // retained in addition to its parameters so selecting a named preset
     // always forces a frame even when its values happen to match Custom.
@@ -107,8 +132,8 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
 
     /// Thermal/power-aware frame rate. If the system is in low-power mode,
     /// on battery, or under thermal pressure, we cap the user-selected rate to
-    /// keep Deep mode from worsening the situation. The stream is restarted
-    /// when the effective rate changes, so this adapts live.
+    /// keep Deep mode from worsening the situation. The stream is reconfigured
+    /// in place when the effective rate changes, so this adapts live.
     private var effectiveFramesPerSecond: Int32 {
         let user = framesPerSecond
         let processInfo = ProcessInfo.processInfo
@@ -257,6 +282,13 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         filterParameters = parameters
         self.temporalMode = temporalMode
         if changed { filterRevision &+= 1 }
+        // Leaving Frozen (or entering it) changes the capture rate the streams
+        // need: Frozen can drop to a keep-alive rate after its first present,
+        // every other mode needs the user's configured rate immediately.
+        if temporalMode != .frozen {
+            frozenThrottledDisplays.removeAll()
+        }
+        reconcileStreamFrameRates()
         // Apply the new settings immediately on the last captured frames.
         // Without this, a display whose screen content is static delivers no
         // new stream samples, so the old filter would stay visible (and a
@@ -272,7 +304,23 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     @MainActor
     func setRenderingPaused(_ paused: Bool) {
         renderingPaused = paused
-        guard !paused else { return }
+        if paused {
+            // Hysteresis: quick drags (sub-second) keep full capture so resume
+            // is instant; only a sustained pause throttles the streams down.
+            pauseThrottleWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.renderingPaused else { return }
+                self.pauseThrottleActive = true
+                self.reconcileStreamFrameRates()
+            }
+            pauseThrottleWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.pauseThrottleDelay, execute: work)
+            return
+        }
+        pauseThrottleWorkItem?.cancel()
+        pauseThrottleWorkItem = nil
+        pauseThrottleActive = false
+        reconcileStreamFrameRates()
         // Resume with the freshest cached frames: on a static display the
         // stream may not deliver a new sample for a long time, so re-rendering
         // on resume beats showing stale settings until content happens to change.
@@ -298,6 +346,8 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         displayOverlays.removeValue(forKey: displayID)
         lastPixelBuffers.removeValue(forKey: displayID)
         renderingDisplays.remove(displayID)
+        frozenThrottledDisplays.remove(displayID)
+        streamConfiguredFPS.removeValue(forKey: displayID)
         renderer?.clearFrameState(cacheKey: Int(displayID))
         if let stream {
             Task { try? await stream.stopCapture() }
@@ -313,6 +363,8 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         displayOverlays.removeAll()
         renderingDisplays.removeAll()
         lastPixelBuffers.removeAll()
+        frozenThrottledDisplays.removeAll()
+        streamConfiguredFPS.removeAll()
         for displayID in displayIDs {
             renderer?.clearFrameState(cacheKey: Int(displayID))
         }
@@ -327,7 +379,24 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
     /// call that enumerates displays and windows; call it as few times as
     /// possible per activation.
     private func fetchShareableContent() async -> SCShareableContent? {
-        try? await SCShareableContent.current
+        await currentShareableContent()
+    }
+
+    /// `SCShareableContent.current` is WindowServer/TCC IPC that is documented
+    /// to occasionally hang when replayd is wedged. Race it against a deadline
+    /// so focus activation can never block forever behind the system; a nil
+    /// result follows the existing permission-denied handling.
+    private func currentShareableContent() async -> SCShareableContent? {
+        await withCheckedContinuation { continuation in
+            let gate = ShareableContentGate(continuation)
+            let fetch = Task.detached { gate.complete(try? await SCShareableContent.current) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.shareableContentTimeout) {
+                gate.complete(nil)
+            }
+            // If the IPC never returns, only this abandoned fetch task leaks;
+            // the gate releases the continuation on first completion either way.
+            _ = fetch
+        }
     }
 
     // MARK: - Screen Recording Permission
@@ -552,24 +621,19 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             let excludedWindows = resolvedContent.windows.filter { $0.windowID == overlay.windowNumber }
             let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
 
-            let config = SCStreamConfiguration()
-            config.width = captureDimension(display.width)
-            config.height = captureDimension(display.height)
-            config.minimumFrameInterval = CMTime(value: 1, timescale: effectiveFramesPerSecond)
-            config.showsCursor = false
-            if #available(macOS 13.0, *) { config.capturesAudio = false }
-            config.pixelFormat = kCVPixelFormatType_32BGRA
-            config.queueDepth = 2
+            let config = makeStreamConfiguration(fps: effectiveFramesPerSecond, displayID: displayID)
 
             let stream = SCStream(filter: filter, configuration: config, delegate: nil)
             streamToStart = stream
             try stream.addStreamOutput(self, type: SCStreamOutputType.screen, sampleHandlerQueue: sampleHandlerQueue)
             guard captureGeneration == generation else { return }
             streams[displayID] = stream
+            streamConfiguredFPS[displayID] = effectiveFramesPerSecond
             try await stream.startCapture()
             guard captureGeneration == generation else {
                 if streams[displayID] === stream {
                     streams.removeValue(forKey: displayID)
+                    streamConfiguredFPS.removeValue(forKey: displayID)
                 }
                 try? await stream.stopCapture()
                 return
@@ -581,10 +645,76 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
             }
             if let streamToStart, streams[displayID] === streamToStart {
                 streams.removeValue(forKey: displayID)
+                streamConfiguredFPS.removeValue(forKey: displayID)
             }
             NSLog("[Hyperfocus] Failed to start capture for display \(displayID): \(error)")
             self.presentStreamFailureAlert(displayID: displayID, error: error)
         }
+    }
+
+    // MARK: - In-place stream reconfiguration
+
+    /// Builds the capture configuration shared by stream creation and
+    /// in-place rate changes. Must match what `startCapture` uses so an
+    /// `updateConfiguration` never resets unrelated settings.
+    private func makeStreamConfiguration(fps: Int32, displayID: CGDirectDisplayID) -> SCStreamConfiguration {
+        let config = SCStreamConfiguration()
+        config.width = captureDimension(CGDisplayPixelsWide(displayID))
+        config.height = captureDimension(CGDisplayPixelsHigh(displayID))
+        config.minimumFrameInterval = CMTime(value: 1, timescale: fps)
+        config.showsCursor = false
+        if #available(macOS 13.0, *) { config.capturesAudio = false }
+        config.pixelFormat = kCVPixelFormatType_32BGRA
+        config.queueDepth = 2
+        return config
+    }
+
+    /// Desired capture rate for a display: the thermal/low-power-capped user
+    /// rate, throttled to the keep-alive rate while that display is Frozen and
+    /// already presented, or while a sustained rendering pause is active.
+    private func desiredCaptureFPS(for displayID: CGDirectDisplayID) -> Int32 {
+        var fps = effectiveFramesPerSecond
+        if frozenThrottledDisplays.contains(displayID) || pauseThrottleActive {
+            fps = min(fps, Self.throttledCaptureFPS)
+        }
+        return fps
+    }
+
+    /// Applies the per-display desired capture rate to every running stream
+    /// that differs from its current configuration. No-op when nothing changed.
+    @MainActor
+    private func reconcileStreamFrameRates() {
+        for (displayID, stream) in streams {
+            let desired = desiredCaptureFPS(for: displayID)
+            guard streamConfiguredFPS[displayID] != desired else { continue }
+            if #available(macOS 13.0, *) {
+                let config = makeStreamConfiguration(fps: desired, displayID: displayID)
+                stream.updateConfiguration(config) { [weak self] error in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        if let error {
+                            NSLog("[Hyperfocus] updateConfiguration failed for display \(displayID): \(error)")
+                            return
+                        }
+                        self.streamConfiguredFPS[displayID] = desired
+                    }
+                }
+            } else {
+                // macOS 12: no in-place update API. The AppDelegate restarts
+                // the session instead; mark the rate so we do not retry.
+                streamConfiguredFPS[displayID] = desired
+                NSLog("[Hyperfocus] Stream rate change requires session restart on macOS 12")
+            }
+        }
+    }
+
+    /// Reconfigures every running stream to the current effective frame rate
+    /// (user FPS capped by thermal/low-power state) in place. Used by the
+    /// thermal/power-change and FPS-slider paths instead of tearing the whole
+    /// session down, which flashed the overlays and re-ran TCC checks.
+    @MainActor
+    func reconfigureStreamFrameRate() {
+        reconcileStreamFrameRates()
     }
 
     // MARK: - Alerts
@@ -594,9 +724,9 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
         let alert = NSAlert()
         alert.messageText = "Could Not Start Blur Stream"
         alert.informativeText = """
-            Hyperfocus could not start the ScreenCaptureKit stream for display \"(displayID)\". \
+            Hyperfocus could not start the ScreenCaptureKit stream for display \(displayID). \
             Make sure Screen Recording access is still granted in System Settings ▸ \
-            Privacy & Security ▸ Screen Recording. Error: \\(error.localizedDescription)
+            Privacy & Security ▸ Screen Recording. Error: \(error.localizedDescription)
             """
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Open System Settings")
@@ -736,6 +866,14 @@ final class BlurEngine: NSObject, SCStreamOutput, @unchecked Sendable {
                         self.renderingDisplays.remove(displayID)
                         if result == .rendered {
                             self.onFramePresented?(displayID, renderRevision)
+                            // Frozen needs only one live frame. Once it is on
+                            // screen the stream can drop to a keep-alive rate;
+                            // settings changes re-render from the cached buffer.
+                            if renderTemporalMode == .frozen,
+                               !self.frozenThrottledDisplays.contains(displayID) {
+                                self.frozenThrottledDisplays.insert(displayID)
+                                self.reconcileStreamFrameRates()
+                            }
                         }
                     }
                 }
@@ -773,5 +911,26 @@ private final class StillFrameCollector: NSObject, SCStreamOutput, @unchecked Se
         done = true
         continuation?.resume(returning: cg)
         continuation = nil
+    }
+}
+
+/// Ensures a `CheckedContinuation` is resumed exactly once no matter which
+/// of several racing producers finishes first (shareable-content fetch vs.
+/// timeout). The loser's `complete` call is a no-op.
+private final class ShareableContentGate: @unchecked Sendable {
+    private let continuation: CheckedContinuation<SCShareableContent?, Never>
+    private let lock = NSLock()
+    private var didComplete = false
+
+    init(_ continuation: CheckedContinuation<SCShareableContent?, Never>) {
+        self.continuation = continuation
+    }
+
+    func complete(_ content: SCShareableContent?) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !didComplete else { return }
+        didComplete = true
+        continuation.resume(returning: content)
     }
 }

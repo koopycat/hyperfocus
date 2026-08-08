@@ -64,18 +64,35 @@ final class MetalBlurRenderer: @unchecked Sendable {
     }
 
     /// Per-display change-detection state, keyed by an identifier the caller
-    /// provides (display ID).  `lastHash`/`lastParameters` describe the frame
-    /// whose pixels are currently visible in the display's drawable.
+    /// provides (display ID).  The hash buffers hold per-tile 64-bit FNV
+    /// hashes of the last two hashed frames (ping-pong), so the host can both
+    /// detect any change and count how many tiles changed.
     private struct FrameState {
-        var lastHash: UInt64?
+        var hasPresentedHash = false
+        /// Two shared-memory buffers; `hashWriteIndex` alternates each frame.
+        var hashBuffers: [MTLBuffer?] = [nil, nil]
+        var hashWriteIndex = 0
+        /// Number of tile hashes a buffer holds (tilesX * tilesY).
+        var hashTileCount = 0
         var lastBlurRadius: CGFloat = -1
         var lastFilterID: String?
         var lastParameters: FilterParameters?
         var lastTemporalMode: TemporalMode?
         var lastRenderTime: CFAbsoluteTime = 0
-        var hashBuffer: MTLBuffer?
     }
     private var frameStates: [Int: FrameState] = [:]
+
+    /// Tile edge in samples (matches `kTileSize` in BlurDesatShaders.metal).
+    /// Each sample covers a 2x2 pixel cell, so a tile covers 64x64 capture
+    /// pixels -- the granularity of the Live-mode change-magnitude gate.
+    private static let hashTileSize = 32
+    /// Hash sampling stride in pixels (matches `kSampleStride` in the shader).
+    private static let hashSampleStride = 2
+    /// Minimum number of changed tiles that makes Live mode re-render. One
+    /// tile covers ~256x256 display pixels, so this skips sub-tile micro-
+    /// changes (blinking cursors, clock seconds, 1px spinners) while still
+    /// tracking any real background motion.
+    private static let liveMinimumChangedTiles = 2
 
     /// Half-resolution texture pairs for the bloom stage, keyed like the main
     /// pool. Allocated lazily because only bloom-enabled filters need them.
@@ -213,7 +230,7 @@ final class MetalBlurRenderer: @unchecked Sendable {
         // frame, neither a source texture nor the hash pass is needed until a
         // filter, parameter, radius, or temporal-mode change asks for one.
         if temporalMode == .frozen,
-           state.lastHash != nil,
+           state.hasPresentedHash,
            !settingsChanged(
                state,
                blurRadius: blurRadius,
@@ -232,15 +249,26 @@ final class MetalBlurRenderer: @unchecked Sendable {
             return
         }
 
-        if state.hashBuffer == nil {
-            state.hashBuffer = device.makeBuffer(
-                length: MemoryLayout<UInt64>.size,
-                options: .storageModeShared
-            )
+        // Tile grid for this capture size. Buffers are recreated when the
+        // capture resolution changes (display hot-plug / resolution switch).
+        let samplesPerRow = (sourceTexture.width + Self.hashSampleStride - 1) / Self.hashSampleStride
+        let sampleRows = (sourceTexture.height + Self.hashSampleStride - 1) / Self.hashSampleStride
+        let tilesX = (samplesPerRow + Self.hashTileSize - 1) / Self.hashTileSize
+        let tilesY = (sampleRows + Self.hashTileSize - 1) / Self.hashTileSize
+        let totalTiles = tilesX * tilesY
+        if state.hashTileCount != totalTiles {
+            let byteCount = totalTiles * MemoryLayout<UInt64>.stride
+            state.hashBuffers = [
+                device.makeBuffer(length: byteCount, options: .storageModeShared),
+                device.makeBuffer(length: byteCount, options: .storageModeShared)
+            ]
+            state.hashWriteIndex = 0
+            state.hasPresentedHash = false
+            state.hashTileCount = totalTiles
             frameStates[cacheKey] = state
         }
 
-        guard let hashBuffer = state.hashBuffer,
+        guard let writeBuffer = state.hashBuffers[state.hashWriteIndex],
               let hashCommandBuffer = commandQueue.makeCommandBuffer(),
               let hashEncoder = hashCommandBuffer.makeComputeCommandEncoder() else {
             completion(.skipped)
@@ -249,7 +277,7 @@ final class MetalBlurRenderer: @unchecked Sendable {
 
         hashEncoder.setComputePipelineState(frameHashPipeline)
         hashEncoder.setTexture(sourceTexture, index: 0)
-        hashEncoder.setBuffer(hashBuffer, offset: 0, index: 0)
+        hashEncoder.setBuffer(writeBuffer, offset: 0, index: 0)
         var rect = sanitizedHashSkipRect(
             skipRect,
             sourceWidth: sourceTexture.width,
@@ -267,7 +295,8 @@ final class MetalBlurRenderer: @unchecked Sendable {
             }
             self.stateQueue.async {
                 self.finishHashPhase(
-                    hashBuffer: hashBuffer,
+                    hashBuffer: writeBuffer,
+                    previousBuffer: state.hashBuffers[1 - state.hashWriteIndex],
                     sourceTexture: sourceTexture,
                     blurRadius: blurRadius,
                     filterID: filterID,
@@ -333,6 +362,7 @@ final class MetalBlurRenderer: @unchecked Sendable {
     /// hash and either drops the frame or encodes the render pass.
     private func finishHashPhase(
         hashBuffer: MTLBuffer,
+        previousBuffer: MTLBuffer?,
         sourceTexture: MTLTexture,
         blurRadius: CGFloat,
         filterID: String,
@@ -342,8 +372,34 @@ final class MetalBlurRenderer: @unchecked Sendable {
         cacheKey: Int,
         completion: @escaping (FrameRenderResult) -> Void
     ) {
-        let hash = hashBuffer.contents().load(as: UInt64.self)
         let state = frameStates[cacheKey] ?? FrameState()
+
+        // Per-tile comparison: yields both a change verdict and a magnitude
+        // (changed-tile count). `hashBuffer` holds this frame's hashes; the
+        // previous frame's live in the ping-pong partner buffer.
+        let tileCount = state.hashTileCount
+        let tiles = hashBuffer.contents().assumingMemoryBound(to: UInt64.self)
+        let previous = previousBuffer?.contents().assumingMemoryBound(to: UInt64.self)
+
+        var combined: UInt64 = 1469598103934665603 // FNV offset basis
+        var changedTiles = 0
+        let contentChanged: Bool
+        if !state.hasPresentedHash {
+            // First hashed frame: the ping-pong partner buffer holds no
+            // rendered reference yet, so there is nothing to compare against.
+            for i in 0..<tileCount { combined ^= tiles[i] }
+            contentChanged = true
+        } else if let previous, tileCount > 0 {
+            for i in 0..<tileCount {
+                combined ^= tiles[i]
+                if tiles[i] != previous[i] { changedTiles += 1 }
+            }
+            contentChanged = changedTiles > 0
+        } else {
+            contentChanged = true
+        }
+        let hasPresented = state.hasPresentedHash
+        let now = CFAbsoluteTimeGetCurrent()
 
         let settingsChanged = self.settingsChanged(
             state,
@@ -352,18 +408,20 @@ final class MetalBlurRenderer: @unchecked Sendable {
             parameters: parameters,
             temporalMode: temporalMode
         )
-        let contentChanged = state.lastHash != hash
-        let hasPresented = state.lastHash != nil
-        let now = CFAbsoluteTimeGetCurrent()
 
-        // Temporal policy. On skipped frames the stored hash and render time
-        // are deliberately NOT updated, so a Settled-mode skip keeps the
+        // Temporal policy. On skipped frames the stored hashes and render
+        // time are deliberately NOT updated, so a Settled-mode skip keeps the
         // pending change visible to the gate and a later frame renders once
         // the interval elapses.
         let shouldRender: Bool
         switch temporalMode {
         case .live:
-            shouldRender = contentChanged || settingsChanged
+            // Magnitude gate: a single changed tile (a blinking cursor, the
+            // clock's seconds tick, a 1px spinner) is not worth a full
+            // re-blur + full-screen present. Two or more tiles means real
+            // background motion.
+            shouldRender = settingsChanged
+                || (contentChanged && changedTiles >= Self.liveMinimumChangedTiles)
         case .settled:
             if settingsChanged || !hasPresented {
                 shouldRender = true
@@ -407,11 +465,11 @@ final class MetalBlurRenderer: @unchecked Sendable {
             bloomTexture = encodeBloomStage(source: pair.intermediate, commandBuffer: commandBuffer)
         }
 
-        // Grain is re-seeded per rendered frame from the content hash, so a
-        // static frame always shows identical grain and re-renders of the
-        // same content never shimmer.
+        // Grain is re-seeded per rendered frame from the combined content hash,
+        // so a static frame always shows identical grain and re-renders of
+        // the same content never shimmer.
         var effectiveParameters = parameters
-        effectiveParameters.grainSeed = Float(hash % 4096)
+        effectiveParameters.grainSeed = Float(combined % 4096)
         if bloomTexture == nil { effectiveParameters.bloomAmount = 0 }
 
         // Post-process writes straight into the drawable when its size matches
@@ -459,7 +517,13 @@ final class MetalBlurRenderer: @unchecked Sendable {
                     return
                 }
                 var state = self.frameStates[cacheKey] ?? FrameState()
-                state.lastHash = hash
+                // The just-written buffer becomes the comparison reference for
+                // the next frame; the next write uses its ping-pong partner.
+                // Swapping only here (not on skipped frames) keeps the last
+                // rendered hashes as the reference, so a Settled/Live skip
+                // cannot lose the pending change.
+                state.hasPresentedHash = true
+                state.hashWriteIndex = 1 - state.hashWriteIndex
                 state.lastBlurRadius = blurRadius
                 state.lastFilterID = filterID
                 state.lastParameters = parameters
