@@ -12,14 +12,14 @@ Built for deep work, screen sharing, and a calmer desktop.
 
 ### Homebrew (recommended)
 
-The cask ships from the dedicated tap:
+The cask ships from the shared Koopycat tap:
 
 ```bash
-brew tap koopycat/hyperfocus
-brew install --cask hyperfocus
+brew tap koopycat/tap
+brew install --cask koopycat/tap/hyperfocus
 ```
 
-On first install Homebrew 6 asks you to trust the new tap (or run `brew trust koopycat/hyperfocus`).
+On first install Homebrew asks you to trust the tap (or run `brew trust --tap koopycat/tap`).
 
 ### Direct download
 
@@ -83,3 +83,5 @@ No accounts. No data collection. No telemetry. Just focus.
 ## License & distribution
 
 Hyperfocus is free and open source, distributed via [GitHub Releases](https://github.com/koopycat/hyperfocus/releases) and Homebrew. All modes — Studio and Deep — are included with no trial, no license, and no subscription. No accounts. No data collection. No telemetry.
+
+Maintainers: see [`docs/RELEASING.md`](docs/RELEASING.md) for the automated signed, notarized, and Homebrew-published release process.

@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  release-tools:
+    name: Release tooling
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test release tooling
+        run: python3 -m unittest discover -s tests -p '*_test.py'
+      - name: Validate current release metadata
+        run: |
+          version="$(awk '$1 == "MARKETING_VERSION" {print $3}' Hyperfocus/AppCore/Release.xcconfig)"
+          python3 scripts/release_metadata.py --tag "v${version}"
+      - name: Validate cask syntax
+        run: ruby -c Casks/hyperfocus.rb
+      - name: Build unsigned universal release artifact
+        run: |
+          version="$(awk '$1 == "MARKETING_VERSION" {print $3}' Hyperfocus/AppCore/Release.xcconfig)"
+          scripts/build-release.sh "$version" --unsigned
+      - name: Verify universal executable
+        run: |
+          architectures="$(lipo -archs build/release-derived-data/Build/Products/Release/Hyperfocus.app/Contents/MacOS/Hyperfocus)"
+          [[ " $architectures " == *" arm64 "* ]]
+          [[ " $architectures " == *" x86_64 "* ]]

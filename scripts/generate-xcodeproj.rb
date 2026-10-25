@@ -1,10 +1,12 @@
 #!/usr/bin/env ruby
+require 'fileutils'
 require 'securerandom'
 
 PROJECT_DIR = File.expand_path('..', __dir__)
 APP_NAME = 'Hyperfocus'
 BUNDLE_ID = 'com.hyperfocus.app'
 TEAM_ID = '' # Set via xcconfig or leave empty for automatic signing
+MARKETING_VERSION = '1.0.0'
 
 SRCROOT = PROJECT_DIR
 PROJECT_FILE = File.join(SRCROOT, "#{APP_NAME}.xcodeproj", 'project.pbxproj')
@@ -328,7 +330,7 @@ IO.write(PROJECT_FILE, <<~PBXPROJ)
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = #{MARKETING_VERSION};
 				PRODUCT_BUNDLE_IDENTIFIER = "#{BUNDLE_ID}";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -355,7 +357,7 @@ IO.write(PROJECT_FILE, <<~PBXPROJ)
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = #{MARKETING_VERSION};
 				PRODUCT_BUNDLE_IDENTIFIER = "#{BUNDLE_ID}";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -390,4 +392,32 @@ IO.write(PROJECT_FILE, <<~PBXPROJ)
 }
 PBXPROJ
 
-puts "✅ Created #{APP_NAME}.xcodeproj"
+scheme_dir = File.join(SRCROOT, "#{APP_NAME}.xcodeproj", 'xcshareddata', 'xcschemes')
+FileUtils.mkdir_p(scheme_dir)
+IO.write(File.join(scheme_dir, "#{APP_NAME}.xcscheme"), <<~SCHEME)
+<?xml version="1.0" encoding="UTF-8"?>
+<Scheme LastUpgradeVersion="1530" version="1.7">
+  <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES">
+    <BuildActionEntries>
+      <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">
+        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{app_target_ref}" BuildableName="#{APP_NAME}.app" BlueprintName="#{APP_NAME}" ReferencedContainer="container:#{APP_NAME}.xcodeproj"/>
+      </BuildActionEntry>
+    </BuildActionEntries>
+  </BuildAction>
+  <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"/>
+  <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES">
+    <BuildableProductRunnable runnableDebuggingMode="0">
+      <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{app_target_ref}" BuildableName="#{APP_NAME}.app" BlueprintName="#{APP_NAME}" ReferencedContainer="container:#{APP_NAME}.xcodeproj"/>
+    </BuildableProductRunnable>
+  </LaunchAction>
+  <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES">
+    <BuildableProductRunnable runnableDebuggingMode="0">
+      <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{app_target_ref}" BuildableName="#{APP_NAME}.app" BlueprintName="#{APP_NAME}" ReferencedContainer="container:#{APP_NAME}.xcodeproj"/>
+    </BuildableProductRunnable>
+  </ProfileAction>
+  <AnalyzeAction buildConfiguration="Debug"/>
+  <ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
+</Scheme>
+SCHEME
+
+puts "✅ Created #{APP_NAME}.xcodeproj with shared scheme"

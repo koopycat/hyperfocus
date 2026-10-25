@@ -19,6 +19,9 @@ openspec/
 .DS_Store
 *.dmg
 
+# Python
+__pycache__/
+
 # Build artifacts
 *.app
 *.ipa

@@ -1,0 +1,223 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hyperfocus-release
+  cancel-in-progress: false
+
+jobs:
+  validate-release:
+    name: Validate release tag
+    runs-on: macos-15
+    steps:
+      - name: Validate stable semantic version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Release tag must be a stable semantic version such as v1.2.3" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Require release commit on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Release tags must point to a commit reachable from main" >&2
+            exit 1
+          }
+      - name: Validate release metadata
+        run: python3 scripts/release_metadata.py --tag "$GITHUB_REF_NAME"
+
+  test:
+    name: Test release tooling
+    needs: validate-release
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 -m unittest discover -s tests -p '*_test.py'
+      - run: ruby -c Casks/hyperfocus.rb
+
+  build:
+    name: Build, sign, and notarize
+    needs: test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Import Developer ID certificate
+        id: keychain
+        shell: bash
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/hyperfocus-signing.keychain-db"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          keychain_password="$(openssl rand -hex 32)"
+          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          rm -f "$certificate"
+          echo "path=$keychain" >> "$GITHUB_OUTPUT"
+      - name: Configure notarization API key
+        env:
+          API_KEY_P8_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/notary"
+          printf '%s' "$API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/notary/AuthKey.p8"
+      - name: Build, notarize, and staple universal DMG
+        env:
+          SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+          APP_STORE_CONNECT_API_KEY_PATH: ${{ runner.temp }}/notary/AuthKey.p8
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          scripts/build-release.sh "$version"
+          dmg="dist/Hyperfocus-${version}.dmg"
+          shasum -a 256 "$dmg" > "dist/Hyperfocus-${version}.dmg.sha256"
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hyperfocus-release
+          path: |
+            dist/Hyperfocus-*.dmg
+            dist/Hyperfocus-*.dmg.sha256
+          if-no-files-found: error
+      - name: Remove temporary credentials
+        if: always()
+        env:
+          KEYCHAIN_PATH: ${{ steps.keychain.outputs.path }}
+        run: |
+          rm -rf "$RUNNER_TEMP/notary"
+          if [[ -n "$KEYCHAIN_PATH" && -f "$KEYCHAIN_PATH" ]]; then
+            security delete-keychain "$KEYCHAIN_PATH"
+          fi
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hyperfocus-release
+          path: dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "Hyperfocus ${GITHUB_REF_NAME#v}"
+
+  update-homebrew:
+    name: Update Homebrew cask
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Create Homebrew tap token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.HOMEBREW_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: homebrew-tap
+          permission-contents: write
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hyperfocus-release
+          path: dist
+      - name: Check out Homebrew tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-tap
+          token: ${{ steps.app-token.outputs.token }}
+          path: homebrew-tap
+      - name: Update and validate casks
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cask="homebrew-tap/Casks/hyperfocus.rb"
+          if [[ -f "$cask" ]]; then
+            # shellcheck disable=SC2016
+            current="$(python3 -c 'import re,sys; print(re.search(r"^\s*version\s+\"([^\"]+)\"", open(sys.argv[1]).read(), re.M).group(1))' "$cask")"
+            newest="$(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -1)"
+            if [[ "$newest" != "$version" || "$current" == "$version" ]]; then
+              echo "Refusing non-increasing cask update from $current to $version" >&2
+              exit 1
+            fi
+          else
+            mkdir -p "$(dirname "$cask")"
+            cp Casks/hyperfocus.rb "$cask"
+          fi
+          checksum="$(shasum -a 256 "dist/Hyperfocus-${version}.dmg" | awk '{print $1}')"
+          expected_checksum="$(awk '{print $1}' "dist/Hyperfocus-${version}.dmg.sha256")"
+          test "$checksum" = "$expected_checksum"
+          python3 scripts/update_cask.py "$cask" "$version" "$checksum"
+          ruby -c "$cask"
+      - name: Commit and push cask
+        working-directory: homebrew-tap
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          git add Casks/hyperfocus.rb
+          git diff --cached --check
+          git commit -m "Update Hyperfocus to ${version}"
+          git push origin HEAD:main
+
+  verify-homebrew:
+    name: Verify Homebrew cask (${{ matrix.arch }})
+    needs: update-homebrew
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    steps:
+      - name: Verify native runner
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: test "$(uname -m)" = "$EXPECTED_ARCH"
+      - name: Install and validate release cask
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_ENV_HINTS: "1"
+        run: |
+          set -euo pipefail
+          brew tap koopycat/tap
+          brew trust --tap koopycat/tap
+          brew uninstall --cask --force hyperfocus 2>/dev/null || true
+          brew install --cask koopycat/tap/hyperfocus
+          app="/Applications/Hyperfocus.app"
+          version="${GITHUB_REF_NAME#v}"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
+          architectures="$(lipo -archs "$app/Contents/MacOS/Hyperfocus")"
+          [[ " $architectures " == *" arm64 "* ]]
+          [[ " $architectures " == *" x86_64 "* ]]
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=4 "$app"

@@ -9,7 +9,7 @@ cask "hyperfocus" do
   desc "Blur and desaturate background windows so only the active window stays sharp"
   homepage "https://koopycat.github.io/hyperfocus/"
 
-  depends_on macos: :monterey
+  depends_on macos: ">= :monterey"
 
   app "Hyperfocus.app"
 
