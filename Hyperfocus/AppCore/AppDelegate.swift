@@ -43,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let deepFilterIDKey = DeepSettings.filterIDKey
     private static let temporalModeKey = DeepSettings.temporalModeKey
     private static let filterOverridesKey = DeepSettings.overridesKey
+    private static let tintColorKey = "tintColorData"
+    private static let excludedAppsKey = "excludedApps"
 
     private let studioDimOpacity: CGFloat = 0.32
 
@@ -175,6 +177,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.addObserver(
             self, forKeyPath: Self.filterOverridesKey, options: .new, context: nil
         )
+        UserDefaults.standard.addObserver(
+            self, forKeyPath: Self.tintColorKey, options: .new, context: nil
+        )
+        UserDefaults.standard.addObserver(
+            self, forKeyPath: Self.excludedAppsKey, options: .new, context: nil
+        )
         updateLaunchAtLogin()
 
         if !UserDefaults.standard.bool(forKey: Self.hasCompletedOnboardingKey) {
@@ -199,6 +207,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.deepFilterIDKey)
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.temporalModeKey)
         UserDefaults.standard.removeObserver(self, forKeyPath: Self.filterOverridesKey)
+        UserDefaults.standard.removeObserver(self, forKeyPath: Self.tintColorKey)
+        UserDefaults.standard.removeObserver(self, forKeyPath: Self.excludedAppsKey)
     }
 
     // MARK: - Focus Toggle
@@ -655,11 +665,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   UserDefaults.standard.string(forKey: Self.deepFilterIDKey) == DeepFilter.customID
             else { return }
             _ = pushSettingsToEngine()
-        case Self.saturationKey:
+        case Self.saturationKey, Self.tintColorKey:
             guard isFocusActive, currentMode == .studio else { return }
-            // Studio previously applied saturation only on the next focus
-            // presentation update. Reflect its retained slider immediately.
-            showFocusPresentation()
+            let saturation = DeepSettings.sanitizedSaturation(
+                UserDefaults.standard.object(forKey: Self.saturationKey) as? Double ?? 0
+            )
+            // Update layers in place without revealing overlays hidden by an
+            // exclusion, a drag, or the pointer leaving the focused window.
+            for overlay in displayManager?.allOverlays() ?? [] {
+                overlay.applyDim(studioDimColor, saturation: CGFloat(saturation))
+            }
+        case Self.excludedAppsKey:
+            updatePresentationForFrontmostApplication()
         case Self.deepFilterIDKey:
             guard isFocusActive, currentMode == .deep else { return }
             if UserDefaults.standard.string(forKey: Self.deepFilterIDKey) == DeepFilter.customID {

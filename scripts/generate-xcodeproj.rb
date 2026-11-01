@@ -6,7 +6,7 @@ PROJECT_DIR = File.expand_path('..', __dir__)
 APP_NAME = 'Hyperfocus'
 BUNDLE_ID = 'com.hyperfocus.app'
 TEAM_ID = '' # Set via xcconfig or leave empty for automatic signing
-MARKETING_VERSION = '1.0.0'
+MARKETING_VERSION = '1.1.0'
 
 SRCROOT = PROJECT_DIR
 PROJECT_FILE = File.join(SRCROOT, "#{APP_NAME}.xcodeproj", 'project.pbxproj')

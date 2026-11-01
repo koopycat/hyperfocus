@@ -6,7 +6,7 @@ set -euo pipefail
 APP_NAME="Hyperfocus"
 BUNDLE_ID="com.hyperfocus.app"
 DEPLOYMENT_TARGET="12.3"
-MARKETING_VERSION="1.0.0"
+MARKETING_VERSION="1.1.0"
 BUILD_VERSION="1"
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SRC_DIR/build"

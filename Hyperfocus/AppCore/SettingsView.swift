@@ -3,17 +3,10 @@ import UniformTypeIdentifiers
 
 // MARK: - Settings Models
 
-struct NamedGroup: Codable, Identifiable, Equatable {
-    var id = UUID()
-    var name: String
-    var bundleIdentifiers: [String]
-}
-
 struct DisplaySetting: Codable, Identifiable, Equatable {
     var id: String
     var displayName: String
     var enabled: Bool = true
-    var customOpacity: Double?
 }
 
 /// Canonicalizes imported display settings before they touch SwiftUI state.
@@ -21,10 +14,7 @@ struct DisplaySetting: Codable, Identifiable, Equatable {
 /// must collapse duplicates even when it originated from a hand-edited file.
 private func normalizedDisplaySettings(_ settings: [DisplaySetting]) -> [DisplaySetting] {
     var unique: [String: DisplaySetting] = [:]
-    for var setting in settings where !setting.id.isEmpty {
-        if let opacity = setting.customOpacity {
-            setting.customOpacity = opacity.isFinite ? min(max(opacity, 0), 1) : nil
-        }
+    for setting in settings where !setting.id.isEmpty {
         unique[setting.id] = setting
     }
     return unique.values.sorted { $0.id < $1.id }
@@ -43,7 +33,6 @@ struct HyperfocusSettings: Codable {
     var focusMode: String?
     var blurFPS: Int
     var excludedApps: [String]
-    var appGroups: [NamedGroup]
     var perDisplay: [DisplaySetting]
 }
 
@@ -69,7 +58,6 @@ extension HyperfocusSettings {
             focusMode: defaults.string(forKey: "hyperfocusMode"),
             blurFPS: DeepSettings.sanitizedFramesPerSecond(defaults.integer(forKey: "blurFPS")),
             excludedApps: (try? JSONDecoder().decode([String].self, from: defaults.data(forKey: "excludedApps") ?? Data())) ?? [],
-            appGroups: (try? JSONDecoder().decode([NamedGroup].self, from: defaults.data(forKey: "appGroups") ?? Data())) ?? [],
             perDisplay: normalizedDisplaySettings(
                 (try? JSONDecoder().decode(
                     [DisplaySetting].self,
@@ -130,7 +118,6 @@ extension HyperfocusSettings {
         )
         defaults.set(DeepSettings.sanitizedFramesPerSecond(blurFPS), forKey: "blurFPS")
         defaults.set(try? JSONEncoder().encode(excludedApps), forKey: "excludedApps")
-        defaults.set(try? JSONEncoder().encode(appGroups), forKey: "appGroups")
         defaults.set(
             try? JSONEncoder().encode(normalizedDisplaySettings(perDisplay)),
             forKey: "perDisplaySettings"
@@ -147,77 +134,94 @@ struct SettingsView: View {
     @AppStorage(DeepSettings.filterIDKey) private var deepFilterID: String = DeepFilter.deepID
     @AppStorage(DeepSettings.temporalModeKey) private var temporalMode: String = TemporalMode.live.rawValue
     @AppStorage(DeepSettings.overridesKey) private var filterOverrides: Data?
-    @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
-    @AppStorage("excludedApps") private var excludedAppsData: Data?
-    @AppStorage("appGroups") private var appGroupsData: Data?
-    @AppStorage("perDisplaySettings") private var perDisplayData: Data?
+    @AppStorage("hyperfocusMode") private var focusMode: String = HyperfocusMode.studio.rawValue
 
-    @State private var selectedTint: Color = .clear
+    private var mode: HyperfocusMode {
+        HyperfocusMode(rawValue: focusMode) ?? .studio
+    }
+
+    private var tintSelection: Binding<Color> {
+        Binding(
+            get: {
+                guard let tintColorData,
+                      let color = try? NSKeyedUnarchiver.unarchivedObject(
+                          ofClass: NSColor.self, from: tintColorData
+                      )
+                else { return .black }
+                return Color(nsColor: color)
+            },
+            set: { color in
+                tintColorData = try? NSKeyedArchiver.archivedData(
+                    withRootObject: NSColor(color).withAlphaComponent(1),
+                    requiringSecureCoding: true
+                )
+            }
+        )
+    }
 
     var body: some View {
-        TabView {
-            GeneralTab()
-                .tabItem { Label("General", systemImage: "gearshape") }
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 16) {
+                Picker("Focus Mode", selection: $focusMode) {
+                    ForEach(HyperfocusMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
+                .frame(width: 190)
 
-            EffectsTab(
-                blurRadius: $deepBlurRadius,
-                saturation: $saturation,
-                deepFilterID: $deepFilterID,
-                temporalMode: $temporalMode,
-                filterOverrides: $filterOverrides,
-                selectedTint: $selectedTint
-            )
-            .tabItem { Label("Effects", systemImage: "camera.filters") }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mode.headline)
+                    Text(mode.detail)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding()
 
-            ExclusionsTab()
-                .tabItem { Label("Exclusions", systemImage: "list.bullet.rectangle") }
+            Divider()
 
-            DisplaysTab()
-                .tabItem { Label("Displays", systemImage: "display") }
+            TabView {
+                GeneralTab()
+                    .tabItem { Label("General", systemImage: "gearshape") }
 
-            GroupsTab()
-                .tabItem { Label("Groups", systemImage: "rectangle.3.group") }
+                EffectsTab(
+                    mode: mode,
+                    blurRadius: $deepBlurRadius,
+                    saturation: $saturation,
+                    deepFilterID: $deepFilterID,
+                    temporalMode: $temporalMode,
+                    filterOverrides: $filterOverrides,
+                    selectedTint: tintSelection
+                )
+                .tabItem { Label("Effects", systemImage: "camera.filters") }
+
+                ExclusionsTab()
+                    .tabItem { Label("Exclusions", systemImage: "list.bullet.rectangle") }
+
+                DisplaysTab()
+                    .tabItem { Label("Displays", systemImage: "display") }
+            }
         }
         .frame(width: 520, height: 540)
-        .onAppear {
-            DeepSettings.migrateIfNeeded()
-            loadTintColor()
-        }
-        .onChange(of: selectedTint) { newValue in
-            let color = NSColor(newValue)
-            tintColorData = try? NSKeyedArchiver.archivedData(
-                withRootObject: color,
-                requiringSecureCoding: true
-            )
-        }
+        .onAppear { DeepSettings.migrateIfNeeded() }
     }
 
-    private func loadTintColor() {
-        guard let tintColorData,
-              let color = try? NSKeyedUnarchiver.unarchivedObject(
-                  ofClass: NSColor.self,
-                  from: tintColorData
-              )
-        else { return }
-        selectedTint = Color(nsColor: color)
-    }
 }
 
 // MARK: - General Tab
 
 struct GeneralTab: View {
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
-    @AppStorage("hyperfocusMode") private var focusMode: String = HyperfocusMode.studio.rawValue
 
     var body: some View {
         Form {
-            Picker("Focus Mode", selection: $focusMode) {
-                ForEach(HyperfocusMode.allCases) { mode in
-                    Text(mode.displayName).tag(mode.rawValue)
-                }
+            if #available(macOS 13.0, *) {
+                Toggle("Launch at Login", isOn: $launchAtLogin)
+            } else {
+                Text("Launch at Login requires macOS 13 or later.")
+                    .foregroundColor(.secondary)
             }
-
-            Toggle("Launch at Login", isOn: $launchAtLogin)
 
             HStack {
                 Button("Export Settings...") { exportSettings() }
@@ -263,6 +267,7 @@ struct GeneralTab: View {
 // MARK: - Effects Tab
 
 struct EffectsTab: View {
+    let mode: HyperfocusMode
     @Binding var blurRadius: Double
     @Binding var saturation: Double
     @Binding var deepFilterID: String
@@ -348,8 +353,26 @@ struct EffectsTab: View {
         )
     }
 
+    private var usesSourceColors: Bool {
+        displayedParameters.duotoneAmount < 1 && displayedParameters.tintOpacity < 1
+    }
+
     var body: some View {
-        Form {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if mode == .studio {
+                    studioControls
+                } else {
+                    deepControls
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+        }
+    }
+
+    private var deepControls: some View {
+        VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Picker("Deep Filter", selection: filterSelection) {
                     Section(header: Text("Focus")) {
@@ -375,7 +398,8 @@ struct EffectsTab: View {
                 Text("Blur Radius: \(Int(effectiveBlurRadius))")
                     .font(.body)
                 Slider(value: blurRadiusBinding, in: basePreset.minimumBlurRadius...48, step: 1)
-                Text("A minimum blur is retained so background text stays unreadable.")
+                    .accessibilityLabel("Blur Radius")
+                Text("A minimum blur keeps background text unreadable. Adjusting a slider creates a Custom filter.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -384,7 +408,11 @@ struct EffectsTab: View {
                 Text("Filter Saturation: \(Int(DeepSettings.sanitizedSaturation(saturationBinding.wrappedValue) * 100))%")
                     .font(.body)
                 Slider(value: saturationBinding, in: 0...1, step: 0.05)
-                Text("Adjusting a slider creates a Custom filter without changing the original preset.")
+                    .disabled(!usesSourceColors)
+                    .accessibilityLabel("Filter Saturation")
+                Text(usesSourceColors
+                     ? "Adjusting a slider creates a Custom filter without changing the original preset."
+                     : "This filter replaces source colors, so saturation has no effect.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -401,31 +429,41 @@ struct EffectsTab: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Blur Frame Rate: \(DeepSettings.sanitizedFramesPerSecond(blurFPS)) FPS")
+                Text("Capture Rate Limit: \(DeepSettings.sanitizedFramesPerSecond(blurFPS)) FPS")
                     .font(.body)
                 Slider(value: Binding(
                     get: { Double(DeepSettings.sanitizedFramesPerSecond(blurFPS)) },
                     set: { blurFPS = DeepSettings.sanitizedFramesPerSecond(Int($0)) }
                 ), in: 1...30, step: 1)
-                Text("Lower = less GPU / more battery")
+                    .disabled(currentTemporalMode == .frozen)
+                    .accessibilityLabel("Capture Rate Limit")
+                Text(currentTemporalMode == .frozen
+                     ? "Frozen holds a still image and manages capture automatically. Switch to Live or Settled to adjust this limit."
+                     : "Maximum capture rate, not visible updates per second. Lower limits save energy; power and thermal limits may reduce it further.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
 
+        }
+    }
+
+    private var studioControls: some View {
+        VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Studio Saturation: \(Int(studioSaturationBinding.wrappedValue * 100))%")
                     .font(.body)
                 Slider(value: studioSaturationBinding, in: 0...1, step: 0.05)
-                Text("Used only by the permission-free Studio mode.")
+                    .accessibilityLabel("Studio Saturation")
+                Text("Reduce background color without capturing your screen.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
 
-            ColorPicker("Studio Dim Color", selection: $selectedTint)
-
-            Spacer()
+            ColorPicker("Studio Dim Color", selection: $selectedTint, supportsOpacity: false)
+            Text("Studio uses a fixed dim strength; this changes its color only.")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
-        .padding()
     }
 
     private func selectFilter(_ id: String) {
@@ -455,13 +493,16 @@ struct EffectsTab: View {
 // MARK: - Exclusions Tab
 
 struct ExclusionsTab: View {
-    @AppStorage("excludedApps") private var excludedAppsData: Data?
-    @State private var excludedApps: [String] = []
+    @AppStorage("excludedApps") private var excludedAppsData: Data = Data()
     @State private var isShowingRunningAppPicker = false
+
+    private var excludedApps: [String] {
+        (try? JSONDecoder().decode([String].self, from: excludedAppsData)) ?? []
+    }
 
     var body: some View {
         Form {
-            Text("Apps that should not trigger focus mode:")
+            Text("Pause the effect while one of these apps is frontmost:")
                 .font(.body)
 
             List {
@@ -469,8 +510,9 @@ struct ExclusionsTab: View {
                     Text(app)
                 }
                 .onDelete { indexSet in
-                    excludedApps.remove(atOffsets: indexSet)
-                    save()
+                    var apps = excludedApps
+                    apps.remove(atOffsets: indexSet)
+                    save(apps)
                 }
             }
 
@@ -481,26 +523,19 @@ struct ExclusionsTab: View {
             Spacer()
         }
         .padding()
-        .onAppear(perform: load)
         .sheet(isPresented: $isShowingRunningAppPicker) {
             RunningApplicationPicker(excludedBundleIdentifiers: excludedApps) { bundleIdentifier in
                 guard !excludedApps.contains(bundleIdentifier) else { return }
-                excludedApps.append(bundleIdentifier)
-                excludedApps.sort()
-                save()
+                save((excludedApps + [bundleIdentifier]).sorted())
             }
         }
     }
 
-    private func load() {
-        guard let data = excludedAppsData,
-              let decoded = try? JSONDecoder().decode([String].self, from: data)
-        else { return }
-        excludedApps = decoded
-    }
 
-    private func save() {
-        excludedAppsData = try? JSONEncoder().encode(excludedApps)
+    private func save(_ apps: [String]) {
+        if let data = try? JSONEncoder().encode(apps) {
+            excludedAppsData = data
+        }
     }
 }
 
@@ -580,112 +615,24 @@ private struct RunningApplicationPicker: View {
     }
 }
 
-// MARK: - Groups Tab
-
-struct GroupsTab: View {
-    @AppStorage("appGroups") private var appGroupsData: Data?
-    @State private var groups: [NamedGroup] = []
-    @State private var editingGroup: NamedGroup?
-
-    var body: some View {
-        Form {
-            List {
-                ForEach(groups) { group in
-                    HStack {
-                        Text(group.name)
-                        Spacer()
-                        Text("\(group.bundleIdentifiers.count) apps")
-                            .foregroundColor(.secondary)
-                        Button("Edit") { editingGroup = group }
-                    }
-                }
-                .onDelete { indexSet in
-                    groups.remove(atOffsets: indexSet)
-                    save()
-                }
-            }
-
-            HStack {
-                Button("Add Group") {
-                    let newGroup = NamedGroup(name: "New Group", bundleIdentifiers: [])
-                    groups.append(newGroup)
-                    editingGroup = newGroup
-                    save()
-                }
-                Spacer()
-            }
-
-            Spacer()
-        }
-        .padding()
-        .onAppear(perform: load)
-        .sheet(item: $editingGroup, onDismiss: save) { group in
-            if let index = groups.firstIndex(where: { $0.id == group.id }) {
-                GroupEditor(group: $groups[index])
-            }
-        }
-    }
-
-    private func load() {
-        guard let data = appGroupsData,
-              let decoded = try? JSONDecoder().decode([NamedGroup].self, from: data)
-        else { return }
-        groups = decoded
-    }
-
-    private func save() {
-        appGroupsData = try? JSONEncoder().encode(groups)
-    }
-}
-
-struct GroupEditor: View {
-    @Binding var group: NamedGroup
-    @State private var newIdentifier: String = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Edit Group").font(.headline)
-
-            TextField("Group Name", text: $group.name)
-
-            Text("Bundle Identifiers")
-                .font(.subheadline)
-
-            List {
-                ForEach(group.bundleIdentifiers, id: \.self) { id in
-                    Text(id)
-                }
-                .onDelete { indexSet in
-                    group.bundleIdentifiers.remove(atOffsets: indexSet)
-                }
-            }
-
-            HStack {
-                TextField("com.example.app", text: $newIdentifier)
-                Button("Add") {
-                    guard !newIdentifier.isEmpty else { return }
-                    group.bundleIdentifiers.append(newIdentifier)
-                    newIdentifier = ""
-                }
-            }
-
-            Spacer()
-        }
-        .padding()
-        .frame(width: 360, height: 280)
-    }
-}
-
 // MARK: - Displays Tab
 
 struct DisplaysTab: View {
     @State private var screens: [NSScreen] = []
-    @AppStorage("perDisplaySettings") private var perDisplayData: Data?
-    @State private var settings: [String: DisplaySetting] = [:]
+    @AppStorage("perDisplaySettings") private var perDisplayData: Data = Data()
+
+    private var settings: [String: DisplaySetting] {
+        let decoded = (try? JSONDecoder().decode([DisplaySetting].self, from: perDisplayData)) ?? []
+        return Dictionary(
+            normalizedDisplaySettings(decoded).map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+    }
 
     var body: some View {
-        Form {
-            Text("Configure focus behavior per display")
+        let currentSettings = settings
+        return Form {
+            Text("Choose which displays receive the focus effect")
                 .font(.headline)
 
             List(screens, id: \.displayID) { screen in
@@ -694,18 +641,22 @@ struct DisplaysTab: View {
                     Text(screen.localizedName)
                     Spacer()
                     Toggle("Enabled", isOn: Binding(
-                        get: { settings[key]?.enabled ?? true },
+                        get: { currentSettings[key]?.enabled ?? true },
                         set: { newValue in
-                            var setting = settings[key] ?? DisplaySetting(
+                            var updated = settings
+                            var setting = updated[key] ?? DisplaySetting(
                                 id: key,
                                 displayName: screen.localizedName,
                                 enabled: newValue
                             )
                             setting.enabled = newValue
-                            settings[key] = setting
-                            save()
+                            updated[key] = setting
+                            if let data = try? JSONEncoder().encode(Array(updated.values)) {
+                                perDisplayData = data
+                            }
                         }
                     ))
+                    .accessibilityLabel("Apply focus effect to \(screen.localizedName)")
                 }
             }
 
@@ -714,22 +665,11 @@ struct DisplaysTab: View {
         .padding()
         .onAppear {
             screens = NSScreen.screens
-            load()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            screens = NSScreen.screens
         }
     }
 
-    private func load() {
-        guard let data = perDisplayData,
-              let decoded = try? JSONDecoder().decode([DisplaySetting].self, from: data)
-        else { return }
-        settings = Dictionary(
-            normalizedDisplaySettings(decoded).map { ($0.id, $0) },
-            uniquingKeysWith: { _, latest in latest }
-        )
-    }
-
-    private func save() {
-        perDisplayData = try? JSONEncoder().encode(Array(settings.values))
-    }
 }
 

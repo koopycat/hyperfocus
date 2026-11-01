@@ -34,6 +34,7 @@ Requires **macOS 12.3** (Monterey) or newer.
 1. Launch Hyperfocus. A focus icon appears in the menu bar.
 2. Click the icon → **Turn On Focus**. Your active window stays sharp; everything behind it recedes.
 3. Fine-tune in **Settings**:
+   - Choose Studio or Deep from the mode selector above every tab; Effects shows only controls used by that mode, preserving each mode's saved values
    - Studio dim color and saturation
    - Deep-mode Focus filters, blur radius, filter saturation, and background updates
    - Presentation filters for polished screen sharing and recordings
@@ -42,6 +43,8 @@ Requires **macOS 12.3** (Monterey) or newer.
 4. Toggle from the menu bar.
 
 That's it. **Zero permissions** required to start.
+
+The unused Groups editor has been removed. Use **Exclusions** to pause the effect for a frontmost app; exclusion and Studio color changes apply immediately, and imported settings refresh the open controls.
 
 ---
 
@@ -62,7 +65,9 @@ Studio works without Screen Recording permission:
 - **Focus filters**: Deep, Ink, Fog, Ember, Vignette, and Paper keep background text unreadable while changing the mood of the workspace
 - **Presentation filters**: Frost and Bokeh prioritize a polished shared screen when visual appeal matters more than maximal attentional austerity
 - Adjustable blur radius and filter saturation, with a protected minimum blur so background text stays unreadable
+- Saturation is unavailable when a filter fully replaces source colors, such as Ember; the disabled control explains why
 - **Background updates**: Live follows changes, Settled coalesces them, and Frozen holds one calm still frame
+- **Capture Rate Limit** sets the maximum capture FPS, not a guaranteed visible update rate. Power and thermal limits may reduce it further; Frozen manages capture automatically and disables this slider
 - A filtered still frame is shown before the live stream starts
 
 Deep mode requires Screen Recording permission, requested only when you enable it.
